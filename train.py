@@ -26,6 +26,7 @@ def render_env(env):
     
 
 def evaluate_policy(env,
+                    domain_name,
                     policy,
                     tracker,
                     total_timesteps,
@@ -37,8 +38,7 @@ def evaluate_policy(env,
     tracker.reset('eval_episode_reward')
     tracker.reset('eval_episode_timesteps')
     for i in range(num_episodes):
-
-        state = env.reset()
+        state = reset_env(env, domain_name)
         if render and i == 0:
             frames = [render_env(env)]
         done = False
@@ -87,6 +87,17 @@ def make_env(args):
     return env
 
 
+def reset_env(env, domain_name):
+    if domain_name != 'point_mass':
+        return env.reset()
+    
+    while True:
+        state = env.reset()
+        if abs(state[0]) > 0.25 or abs(state[1]) > 0.25:
+            break
+    return state
+
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--env_name', default='HalfCheetah-v2')
@@ -98,6 +109,7 @@ def parse_args():
     parser.add_argument('--max_timesteps', default=1e6, type=int)
     parser.add_argument('--batch_size', default=100, type=int)
     parser.add_argument('--replay_buffer_size', default=1000000, type=int)
+    parser.add_argument('--state_buffer_size', default=1000, type=int)
     parser.add_argument('--discount', default=0.99, type=float)
     parser.add_argument('--tau', default=0.005, type=float)
     parser.add_argument('--initial_temperature', default=0.01, type=float)
@@ -133,7 +145,7 @@ def main():
     max_episode_steps = calc_max_episode_steps(env, args.dmc)
 
     replay_buffer = utils.ReplayBuffer(args.replay_buffer_size)
-    state_buffer = utils.StateBuffer(1000)
+    state_buffer = utils.StateBuffer(args.state_buffer_size)
     
     
     dist_policy = DistSAC(device, state_dim, action_dim, max_action, args.initial_temperature, args.lr, args.num_candidates)
@@ -156,6 +168,7 @@ def main():
     
     evaluate_policy(
         env,
+        args.domain_name,
         policy,
         tracker,
         total_timesteps,
@@ -178,6 +191,7 @@ def main():
                 timesteps_since_eval %= args.eval_freq
                 evaluate_policy(
                     env,
+                    args.domain_name,
                     policy,
                     tracker,
                     total_timesteps,
@@ -193,13 +207,8 @@ def main():
             tracker.update('train_episode_reward', episode_reward)
             tracker.update('train_episode_timesteps', episode_timesteps)
             # Reset environment
-            if args.domain_name == 'point_mass':
-                while True:
-                    state = env.reset()
-                    if state[0] > 0 and state[1] > 0:
-                        break
-            else:
-                state = env.reset()
+            state = reset_env(env, args.domain_name)
+            
              
             state_buffer.add(state)
             goal_states = torch.FloatTensor(state_buffer.get()).to(device)
