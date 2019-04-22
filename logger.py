@@ -69,6 +69,7 @@ class StatsTracker(object):
         self.meters['train_episode_reward'] = AverageMeter()
         self.meters['train_episode_timesteps'] = AverageMeter()
         self.meters['eval_episode_reward'] = AverageMeter()
+        self.meters['eval_episode_success'] = AverageMeter()
         self.meters['eval_episode_timesteps'] = AverageMeter()
         self.meters['train_loss'] = AverageMeter()
         self.meters['valid_loss'] = AverageMeter()
@@ -178,6 +179,7 @@ class EvalLogger(Logger):
             'fps',
             'episode_timesteps',
             'eval_episode_reward',
+            'eval_episode_success',
             'eval_episode_timesteps',
         ]
         super(EvalLogger, self).__init__(format_type, file_name, keys)

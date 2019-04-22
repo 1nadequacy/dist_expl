@@ -133,14 +133,14 @@ class SAC(object):
     def alpha(self):
         return self.log_alpha.exp()
 
-    def select_action(self, state, update_stat=True):
+    def select_action(self, state):
         with torch.no_grad():
             state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
             mu, _, _ = self.actor(
                 state, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten()
 
-    def sample_action(self, state, update_stat=True):
+    def sample_action(self, state):
         with torch.no_grad():
             state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
             mu, pi, _ = self.actor(state, compute_log_pi=False)

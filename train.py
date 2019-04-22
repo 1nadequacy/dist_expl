@@ -26,7 +26,7 @@ def render_env(env):
     
 
 def evaluate_policy(env,
-                    domain_name,
+                    args,
                     policy,
                     tracker,
                     total_timesteps,
@@ -38,7 +38,7 @@ def evaluate_policy(env,
     tracker.reset('eval_episode_reward')
     tracker.reset('eval_episode_timesteps')
     for i in range(num_episodes):
-        state = reset_env(env, domain_name)
+        state = reset_env(env, args, eval_mode=True)
         if render and i == 0:
             frames = [render_env(env)]
         done = False
@@ -46,8 +46,7 @@ def evaluate_policy(env,
         timesteps = 0
         while not done:
             with torch.no_grad():
-                action = policy.select_action(
-                    torch.FloatTensor(state), update_stat=False)
+                action = policy.select_action(torch.FloatTensor(state))
             state, reward, done, _ = env.step(action)
             if render and i == 0:
                 frames.append(render_env(env))
@@ -60,35 +59,49 @@ def evaluate_policy(env,
             ]
             file_name = os.path.join(video_dir, '%d.mp4' % total_timesteps)
             utils.save_gif(file_name, frames, color_last=True)
-
+            
+        if args.env_type == 'ant':
+             tracker.update('eval_episode_success', env.get_success(reward))
         tracker.update('eval_episode_reward', sum_reward)
         tracker.update('eval_episode_timesteps', timesteps)
         
 
-def calc_max_episode_steps(env, dmc):
+def calc_max_episode_steps(env, env_type):
     if hasattr(env, '_max_episode_steps'):
         return env._max_episode_steps
     if hasattr(env, 'env') and hasattr(env.env, '_max_episode_steps'):
         return env.env._max_episode_steps
-    return 1000 if dmc else 10000
+    if env_type == 'dmc':
+        return 1000
+    if env_type == 'ant':
+        return 500
+    return 100000
 
 
 def make_env(args):
-    if args.dmc:
+    if args.env_type == 'dmc':
         import dm_control2gym
         env = dm_control2gym.make(
             domain_name=args.domain_name,
             task_name=args.task_name,
             task_kwargs={'random': args.seed},
             visualize_reward=True)
-    else:
+    elif args.env_type == 'mjc':
         from pointmass import point_mass
         env = gym.make(args.env_name)
+    elif args.env_type == 'ant':
+        import ant_env_mujoco
+        env = ant_env_mujoco.EnvWithGoal(
+            ant_env_mujoco.create_maze_env(args.env_name), args.env_name)
+    else:
+        assert 'unknown env type: %s' % args.env_type
     return env
 
 
-def reset_env(env, domain_name):
-    if domain_name != 'point_mass':
+def reset_env(env, args, eval_mode=False):
+    if args.env_type == 'ant':
+        return env.reset(eval_mode=eval_mode)
+    if args.env_type != 'dmc' or args.domain_name != 'point_mass':
         return env.reset()
     
     while True:
@@ -117,7 +130,7 @@ def parse_args():
     parser.add_argument('--policy_freq', default=2, type=int)
     parser.add_argument('--log_format', default='json', type=str)
     parser.add_argument('--save_dir', default='.', type=str)
-    parser.add_argument('--dmc', default=False, action='store_true')
+    parser.add_argument('--env_type', default='dmc', type=str)
     parser.add_argument('--no_eval_save', default=False, action='store_true')
     parser.add_argument('--no_render', default=False, action='store_true')
     parser.add_argument('--lr', default=1e-3, type=float)
@@ -142,7 +155,7 @@ def main():
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
     max_action = float(env.action_space.high[0])
-    max_episode_steps = calc_max_episode_steps(env, args.dmc)
+    max_episode_steps = calc_max_episode_steps(env, args.env_type)
 
     replay_buffer = utils.ReplayBuffer(args.replay_buffer_size)
     state_buffer = utils.StateBuffer(args.state_buffer_size)
@@ -168,7 +181,7 @@ def main():
     
     evaluate_policy(
         env,
-        args.domain_name,
+        args,
         policy,
         tracker,
         total_timesteps,
@@ -191,7 +204,7 @@ def main():
                 timesteps_since_eval %= args.eval_freq
                 evaluate_policy(
                     env,
-                    args.domain_name,
+                    args,
                     policy,
                     tracker,
                     total_timesteps,
@@ -207,7 +220,7 @@ def main():
             tracker.update('train_episode_reward', episode_reward)
             tracker.update('train_episode_timesteps', episode_timesteps)
             # Reset environment
-            state = reset_env(env, args.domain_name)
+            state = reset_env(env, args)
             
              
             state_buffer.add(state)
