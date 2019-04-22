@@ -139,17 +139,26 @@ class DistSAC(object):
     def alpha(self):
         return self.log_alpha.exp()
 
-    def get_distance(self, state, goal_states):
-        state = state.unsqueeze(0).repeat(goal_states.size(0), 1)
-        action, _, _ = self.actor(state, goal_states, compute_pi=False, compute_log_pi=False)
-        q1, q2 = self.critic(state, goal_states, action)
+    def get_distance(self, state, repeated_goal_state, idxs=None):
+        batch_size, num_goals, state_dim = repeated_goal_state.size()
+        repeated_state = state.unsqueeze(1).repeat(1, num_goals, 1)
+        
+        repeated_state = repeated_state.view(-1, state_dim)
+        repeated_goal_state = repeated_goal_state.view(-1, state_dim)
+        
+        repeated_action, _, _ = self.actor(repeated_state, repeated_goal_state, compute_pi=False, compute_log_pi=False)
+        q1, q2 = self.critic(repeated_state, repeated_goal_state, repeated_action)
         dist = -torch.min(q1, q2)
+        dist = dist.view(batch_size, num_goals)
         
-        num_candidates = min(self.num_candidates, goal_states.size(0))
-        dist, idxs = dist.topk(num_candidates, dim=0, largest=False)
-        dist = dist.mean()
+        if idxs is None:
+            num_candidates = min(self.num_candidates, num_goals)
+            dist, idxs = dist.topk(num_candidates, dim=1, largest=False)
+        else:
+            dist = dist.gather(1, idxs)
+        dist = dist.mean(dim=1, keepdim=True)
         
-        return dist.item(), idxs
+        return dist, idxs
     
     def train(self,
               replay_buffer,

@@ -122,7 +122,7 @@ def parse_args():
     parser.add_argument('--max_timesteps', default=1e6, type=int)
     parser.add_argument('--batch_size', default=100, type=int)
     parser.add_argument('--replay_buffer_size', default=1000000, type=int)
-    parser.add_argument('--state_buffer_size', default=1000, type=int)
+    parser.add_argument('--state_buffer_size', default=100, type=int)
     parser.add_argument('--discount', default=0.99, type=float)
     parser.add_argument('--tau', default=0.005, type=float)
     parser.add_argument('--initial_temperature', default=0.01, type=float)
@@ -135,6 +135,8 @@ def parse_args():
     parser.add_argument('--no_render', default=False, action='store_true')
     parser.add_argument('--lr', default=1e-3, type=float)
     parser.add_argument('--expl_coef', default=0., type=float)
+    parser.add_argument('--goal_coef', default=0., type=float)
+    parser.add_argument('--use_pot', default=0, type=int)
     parser.add_argument('--num_candidates', default=1, type=int)
     
     args = parser.parse_args()
@@ -158,7 +160,8 @@ def main():
     max_episode_steps = calc_max_episode_steps(env, args.env_type)
 
     replay_buffer = utils.ReplayBuffer(args.replay_buffer_size)
-    state_buffer = utils.StateBuffer(args.state_buffer_size)
+    start_buffer = utils.StateBuffer(args.state_buffer_size)
+    goal_buffer = utils.StateBuffer(args.state_buffer_size)
     
     
     dist_policy = DistSAC(device, state_dim, action_dim, max_action, args.initial_temperature, args.lr, args.num_candidates)
@@ -223,9 +226,18 @@ def main():
             state = reset_env(env, args)
             
              
-            state_buffer.add(state)
-            goal_states = torch.FloatTensor(state_buffer.get()).to(device)
-            torch.save(goal_states, os.path.join(args.save_dir, 'goals.pt'))
+            start_buffer.add(state)
+            start_state = torch.FloatTensor(start_buffer.get()).to(device)
+            torch.save(start_state, os.path.join(args.save_dir, 'start_states.pt'))
+            repeated_start_state = start_state.unsqueeze(0).repeat(args.batch_size, 1, 1)
+            
+            if len(goal_buffer) > 0:
+                goal_state = torch.FloatTensor(goal_buffer.get()).to(device)
+                torch.save(goal_state, os.path.join(args.save_dir, 'goal_states.pt'))
+                repeated_goal_state = goal_state.unsqueeze(0).repeat(args.batch_size, 1, 1)
+            else:
+                repeated_goal_state = None
+            
                 
             done = False
             episode_reward = 0
@@ -249,22 +261,28 @@ def main():
                                   args.policy_freq, target_entropy=-action_dim)
 
             
-            policy.train(replay_buffer, total_timesteps, tracker,
+            policy.train(replay_buffer, total_timesteps, dist_policy, tracker,
                          args.batch_size, args.discount, args.tau,
-                         args.policy_freq, target_entropy=-action_dim)
+                         args.policy_freq, target_entropy=-action_dim,
+                         expl_coef=args.expl_coef, repeated_start_state=repeated_start_state,
+                         goal_coef=args.goal_coef, repeated_goal_state=repeated_goal_state,
+                         use_pot=args.use_pot == 1)
             
             
         new_state, reward, done, _ = env.step(action)
         done_bool = 0 if episode_timesteps + 1 == max_episode_steps else float(done)
         episode_reward += reward
         
-        if args.expl_coef > 0:
-            with torch.no_grad():
-                expl_bonus, _ = dist_policy.get_distance(
-                    torch.FloatTensor(state).to(device), goal_states)
-                expl_bonus *= args.expl_coef
-            tracker.update('expl_bonus', expl_bonus)
-            reward += expl_bonus
+        #if args.expl_coef > 0:
+        #    with torch.no_grad():
+        #        expl_bonus, _ = dist_policy.get_distance(
+        #            torch.FloatTensor(state).to(device), goal_states)
+        #        expl_bonus *= args.expl_coef
+        #    tracker.update('expl_bonus', expl_bonus)
+        #    reward += expl_bonus
+        
+        if args.env_type == 'dmc' and reward > 0.5:
+            goal_buffer.add(new_state)
 
         replay_buffer.add(state, action, reward, new_state, done_bool, done)
 

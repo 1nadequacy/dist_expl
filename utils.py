@@ -146,6 +146,9 @@ class StateBuffer(object):
         self._storage.append(state)
         self._cursize += 1
         
+    def __len__(self):
+        return len(self._storage)
+        
     def get(self):
         return np.array([x for x in self._storage])
 

@@ -90,6 +90,7 @@ class StatsTracker(object):
         self.meters['gail_reward'] = MovingAverageMeter(window_size)
         self.meters['pot_coef'] = AverageMeter()
         self.meters['expl_bonus'] = MovingAverageMeter(window_size)
+        self.meters['goal_bonus'] = MovingAverageMeter(window_size)
 
         self.meters['total_timesteps'] = IntegerMeter()
         self.meters['num_target_states'] = AverageMeter()
@@ -165,6 +166,7 @@ class TrainLogger(Logger):
             'reward_pearsonr',
             'gail_loss',
             'expl_bonus',
+            'goal_bonus',
         ]
         super(TrainLogger, self).__init__(format_type, file_name, keys)
         self.log_type = 'train'
