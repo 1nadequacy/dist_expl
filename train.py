@@ -120,7 +120,7 @@ def parse_args():
     parser.add_argument('--eval_freq', default=5000, type=int)
     parser.add_argument('--num_eval_episodes', default=10, type=int)
     parser.add_argument('--max_timesteps', default=1e6, type=int)
-    parser.add_argument('--batch_size', default=100, type=int)
+    parser.add_argument('--batch_size', default=512, type=int)
     parser.add_argument('--replay_buffer_size', default=1000000, type=int)
     parser.add_argument('--state_buffer_size', default=100, type=int)
     parser.add_argument('--discount', default=0.99, type=float)
