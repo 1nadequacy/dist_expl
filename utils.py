@@ -184,10 +184,12 @@ class ReplayBuffer(object):
             self._storage.append([])
             
         
-    def _encode_sample(self, idxes, with_goal):
+    def _encode_sample(self, idxes, with_goal, with_ctx):
         obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
         if with_goal:
             goals = []
+        if with_ctx:
+            contexts = []
         
         for traj_idx, pos_idx in idxes:
             data = self._storage[traj_idx][pos_idx]
@@ -202,13 +204,24 @@ class ReplayBuffer(object):
                 goal_pos_idx = random.randint(pos_idx, len(self._storage[traj_idx]) - 1)
                 obs_t = self._storage[traj_idx][goal_pos_idx][0]
                 goals.append(np.array(obs_t, copy=False))
+            if with_ctx:
+                if pos_idx == 0:
+                    ctxs = [np.zeros_like(obs_t) for _ in range(10)]
+                else:
+                    ctx_idxs = np.random.randint(0, pos_idx, size=(10,))
+                    ctxs = []
+                    for ctx_idx in ctx_idxs:
+                        ctxs.append(self._storage[traj_idx][ctx_idx][0])
+                contexts.append(np.array(ctxs))
             
         if with_goal:
             return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals)
+        elif with_ctx:
+            return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(contexts)
         else:
             return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones)
 
-    def sample(self, batch_size, with_goal=False):
+    def sample(self, batch_size, with_goal=False, with_ctx=False):
         """Sample a batch of experiences.
         Parameters
         ----------
@@ -228,11 +241,13 @@ class ReplayBuffer(object):
             done_mask[i] = 1 if executing act_batch[i] resulted in
             the end of an episode and 0 otherwise.
         """
+        assert not (with_goal and with_ctx)
+        
         traj_idxes = [random.randint(0, len(self._storage) - int(len(self._storage[-1]) == 0) - 1) for _ in range(batch_size)]
         pos_idxes = [random.randint(0, len(self._storage[idx]) - 1) for idx in traj_idxes]
 
         idxes = zip(traj_idxes, pos_idxes)
-        return self._encode_sample(idxes, with_goal)
+        return self._encode_sample(idxes, with_goal, with_ctx)
 
     
     

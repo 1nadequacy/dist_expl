@@ -15,6 +15,7 @@ import logger
 import utils
 from SAC import SAC
 from DistSAC import DistSAC
+from GoalSAC import GoalSAC
 
 
 def render_env(env):
@@ -44,10 +45,12 @@ def evaluate_policy(env,
         done = False
         sum_reward = 0
         timesteps = 0
+        rollout = [state]
         while not done:
             with torch.no_grad():
-                action = policy.select_action(torch.FloatTensor(state))
+                action = policy.select_action(state, rollout)
             state, reward, done, _ = env.step(action)
+            rollout.append(state)
             if render and i == 0:
                 frames.append(render_env(env))
             sum_reward += reward
@@ -160,12 +163,10 @@ def main():
     max_episode_steps = calc_max_episode_steps(env, args.env_type)
 
     replay_buffer = utils.ReplayBuffer(args.replay_buffer_size)
-    start_buffer = utils.StateBuffer(args.state_buffer_size)
-    goal_buffer = utils.StateBuffer(args.state_buffer_size)
     
     
     dist_policy = DistSAC(device, state_dim, action_dim, max_action, args.initial_temperature, args.lr, args.num_candidates)
-    policy = SAC(device, state_dim, action_dim, max_action,
+    policy = GoalSAC(device, state_dim, action_dim, max_action,
                  args.initial_temperature, args.lr)
      
     tracker = logger.StatsTracker()
@@ -226,17 +227,14 @@ def main():
             state = reset_env(env, args)
             
              
-            start_buffer.add(state)
-            start_state = torch.FloatTensor(start_buffer.get()).to(device)
-            torch.save(start_state, os.path.join(args.save_dir, 'start_states.pt'))
-            repeated_start_state = start_state.unsqueeze(0).repeat(args.batch_size, 1, 1)
+            rollout = [state]
             
-            if len(goal_buffer) > 0:
-                goal_state = torch.FloatTensor(goal_buffer.get()).to(device)
-                torch.save(goal_state, os.path.join(args.save_dir, 'goal_states.pt'))
-                repeated_goal_state = goal_state.unsqueeze(0).repeat(args.batch_size, 1, 1)
-            else:
-                repeated_goal_state = None
+            #if len(goal_buffer) > 0:
+            #    goal_state = torch.FloatTensor(goal_buffer.get()).to(device)
+            #    torch.save(goal_state, os.path.join(args.save_dir, 'goal_states.pt'))
+            #    repeated_goal_state = goal_state.unsqueeze(0).repeat(args.batch_size, 1, 1)
+            #else:
+            #    repeated_goal_state = None
             
                 
             done = False
@@ -252,7 +250,7 @@ def main():
             action = env.action_space.sample()
         else:
             with torch.no_grad():
-                action = policy.sample_action(np.array(state))
+                action = policy.sample_action(state, rollout)
             
 
         if total_timesteps >= 1e3:
@@ -263,10 +261,7 @@ def main():
             
             policy.train(replay_buffer, total_timesteps, dist_policy, tracker,
                          args.batch_size, args.discount, args.tau,
-                         args.policy_freq, target_entropy=-action_dim,
-                         expl_coef=args.expl_coef, repeated_start_state=repeated_start_state,
-                         goal_coef=args.goal_coef, repeated_goal_state=repeated_goal_state,
-                         use_pot=args.use_pot == 1)
+                         args.policy_freq, target_entropy=-action_dim)
             
             
         new_state, reward, done, _ = env.step(action)
@@ -281,12 +276,14 @@ def main():
         #    tracker.update('expl_bonus', expl_bonus)
         #    reward += expl_bonus
         
-        if args.env_type == 'dmc' and reward > 0.5:
-            goal_buffer.add(new_state)
+        #if args.env_type == 'dmc' and reward > 0.5:
+        #    goal_buffer.add(new_state)
 
+        rollout.append(new_state)
         replay_buffer.add(state, action, reward, new_state, done_bool, done)
 
         state = new_state
+        
 
         episode_timesteps += 1
         total_timesteps += 1
