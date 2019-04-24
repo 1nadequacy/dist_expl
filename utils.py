@@ -206,10 +206,11 @@ class ReplayBuffer(object):
                 obs_t = self._storage[traj_idx][goal_pos_idx][0]
                 goals.append(np.array(obs_t, copy=False))
             if with_ctx:
+                ctx_size = np.random.randint(1, self._ctxsize + 1)
                 if pos_idx == 0:
-                    ctxs = [np.zeros_like(obs_t) for _ in range(self._ctxsize)]
+                    ctxs = [np.zeros_like(obs_t) for _ in range(ctx_size)]
                 else:
-                    ctx_idxs = np.random.randint(0, pos_idx, size=(self._ctxsize,))
+                    ctx_idxs = np.random.randint(0, pos_idx, size=(ctx_size,))
                     ctxs = []
                     for ctx_idx in ctx_idxs:
                         ctxs.append(self._storage[traj_idx][ctx_idx][0])

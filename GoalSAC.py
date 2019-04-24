@@ -164,7 +164,8 @@ class GoalSAC(object):
         return self.log_alpha.exp()
     
     def create_context(self, rollout):
-        idxs = np.random.randint(0, len(rollout), size=(self.ctx_size,))
+        ctx_size = np.random.randint(1, self.ctx_size + 1)
+        idxs = np.random.randint(0, len(rollout), size=(ctx_size,))
         ctxs = [rollout[i] for i in idxs]
         return np.array(ctxs)
 
@@ -230,7 +231,6 @@ class GoalSAC(object):
         done = torch.FloatTensor(1 - done).to(self.device).view(-1, 1)
         ctx = torch.FloatTensor(ctx).to(self.device)
         
-     
         if expl_coef > 0:
             with torch.no_grad():
                 dist, _ = dist_policy.get_distance(state, ctx)
