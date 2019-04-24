@@ -194,6 +194,17 @@ class GoalSAC(object):
         target = torch.cat(targets, dim=1).mean(dim=1)
         return target
     
+    def update_context(self, state, ctx, mask):
+        # state: BxS
+        # ctx: BxKxS
+        # mask: Bx1
+        mask = mask.unsqueeze(1).expand_as(ctx).contiguous()
+        mask[:, 1:, :].fill_(0)
+        state = state.unsqueeze(1).expand_as(ctx)
+        
+        next_ctx = ctx * (1 - mask) + state * mask
+        return next_ctx
+    
             
     def train(self,
               replay_buffer,
@@ -205,7 +216,8 @@ class GoalSAC(object):
               tau=0.005,
               policy_freq=2,
               target_entropy=None,
-              K=10):
+              expl_coef=0.0,
+              dist_threshold=10):
         # Sample replay buffer
         state, action, reward, next_state, done, ctx = replay_buffer.sample(
                 batch_size, with_ctx=True)
@@ -215,15 +227,26 @@ class GoalSAC(object):
         next_state = torch.FloatTensor(next_state).to(self.device)
         done = torch.FloatTensor(1 - done).to(self.device).view(-1, 1)
         ctx = torch.FloatTensor(ctx).to(self.device)
+        
+     
+        with torch.no_grad():
+            dist, _ = dist_policy.get_distance(state, ctx)
+        novel_mask = (dist > dist_threshold).float()
+        novel_mask[0].fill_(1)
+        expl_bonus = novel_mask * expl_coef
+        tracker.update('expl_bonus', expl_bonus.sum().item(), expl_bonus.size(0))
+        next_ctx = self.update_context(state, ctx, novel_mask)
+
+        reward = expl_bonus.detach()
             
         
         tracker.update('train_reward', reward.sum().item(), reward.size(0))
 
         def fit_critic():
             with torch.no_grad():
-                _, policy_action, log_pi = self.actor(next_state, ctx)
+                _, policy_action, log_pi = self.actor(next_state, next_ctx)
                 target_Q1, target_Q2 = self.critic_target(
-                    next_state, ctx, policy_action)
+                    next_state, next_ctx, policy_action)
                 target_V = torch.min(target_Q1,
                                      target_Q2) - self.alpha.detach() * log_pi
                 target_Q = reward + (done * discount * target_V)

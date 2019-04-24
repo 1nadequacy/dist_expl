@@ -109,7 +109,7 @@ def reset_env(env, args, eval_mode=False):
     
     while True:
         state = env.reset()
-        if abs(state[0]) > 0.25 or abs(state[1]) > 0.25:
+        if abs(state[0]) < 0.05 or abs(state[1]) < 0.05:
             break
     return state
 
@@ -138,7 +138,7 @@ def parse_args():
     parser.add_argument('--no_render', default=False, action='store_true')
     parser.add_argument('--lr', default=1e-3, type=float)
     parser.add_argument('--expl_coef', default=0., type=float)
-    parser.add_argument('--goal_coef', default=0., type=float)
+    parser.add_argument('--dist_threshold', default=10, type=float)
     parser.add_argument('--use_pot', default=0, type=int)
     parser.add_argument('--num_candidates', default=1, type=int)
     
@@ -261,7 +261,8 @@ def main():
             
             policy.train(replay_buffer, total_timesteps, dist_policy, tracker,
                          args.batch_size, args.discount, args.tau,
-                         args.policy_freq, target_entropy=-action_dim)
+                         args.policy_freq, target_entropy=-action_dim,
+                         expl_coef=args.expl_coef, dist_threshold=args.dist_threshold)
             
             
         new_state, reward, done, _ = env.step(action)
