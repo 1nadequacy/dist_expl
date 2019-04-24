@@ -139,7 +139,8 @@ class GoalSAC(object):
                  initial_temperature,
                  lr=1e-3,
                  log_std_min=-20,
-                 log_std_max=2):
+                 log_std_max=2,
+                 ctx_size=10):
         self.device = device
 
         self.actor = Actor(state_dim, action_dim, max_action, log_std_min, log_std_max).to(device)
@@ -155,6 +156,7 @@ class GoalSAC(object):
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
 
         self.max_action = max_action
+        self.ctx_size = ctx_size
         
 
     @property
@@ -162,7 +164,7 @@ class GoalSAC(object):
         return self.log_alpha.exp()
     
     def create_context(self, rollout):
-        idxs = np.random.randint(0, len(rollout), size=(10,))
+        idxs = np.random.randint(0, len(rollout), size=(self.ctx_size,))
         ctxs = [rollout[i] for i in idxs]
         return np.array(ctxs)
 
@@ -184,12 +186,12 @@ class GoalSAC(object):
             return pi.cpu().data.numpy().flatten()
         
     
-    def get_value(self, state, num_samples=5):
+    def get_value(self, state, ctx, num_samples=5):
         targets = []
         for _ in range(num_samples):
             with torch.no_grad():
-                _, action, _ = self.actor(state, compute_log_pi=False)
-                target_Q1, target_Q2 = self.critic(state, action)
+                _, action, _ = self.actor(state, ctx, compute_log_pi=False)
+                target_Q1, target_Q2 = self.critic(state, ctx, action)
             targets.append(torch.min(target_Q1, target_Q2))
         target = torch.cat(targets, dim=1).mean(dim=1)
         return target
@@ -229,15 +231,15 @@ class GoalSAC(object):
         ctx = torch.FloatTensor(ctx).to(self.device)
         
      
-        with torch.no_grad():
-            dist, _ = dist_policy.get_distance(state, ctx)
-        novel_mask = (dist > dist_threshold).float()
-        novel_mask[0].fill_(1)
-        expl_bonus = novel_mask * expl_coef
-        tracker.update('expl_bonus', expl_bonus.sum().item(), expl_bonus.size(0))
-        next_ctx = self.update_context(state, ctx, novel_mask)
+        if True or expl_coef > 0:
+            with torch.no_grad():
+                dist, _ = dist_policy.get_distance(state, ctx)
+            novel_mask = (dist > dist_threshold).float()
+            expl_bonus = novel_mask * expl_coef
+            tracker.update('expl_bonus', expl_bonus.sum().item(), expl_bonus.size(0))
+            next_ctx = self.update_context(state, ctx, novel_mask)
 
-        reward = expl_bonus.detach()
+            reward = expl_bonus.detach()
             
         
         tracker.update('train_reward', reward.sum().item(), reward.size(0))

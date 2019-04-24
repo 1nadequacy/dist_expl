@@ -154,7 +154,7 @@ class StateBuffer(object):
 
 
 class ReplayBuffer(object):
-    def __init__(self, size):
+    def __init__(self, size, ctx_size):
         """Create Replay buffer.
         Parameters
         ----------
@@ -165,6 +165,7 @@ class ReplayBuffer(object):
         self._storage = deque()
         self._storage.append([])
         self._maxsize = size
+        self._ctxsize = ctx_size
         self._currentsize = 0
 
     def __len__(self):
@@ -206,9 +207,9 @@ class ReplayBuffer(object):
                 goals.append(np.array(obs_t, copy=False))
             if with_ctx:
                 if pos_idx == 0:
-                    ctxs = [np.zeros_like(obs_t) for _ in range(10)]
+                    ctxs = [np.zeros_like(obs_t) for _ in range(self._ctxsize)]
                 else:
-                    ctx_idxs = np.random.randint(0, pos_idx, size=(10,))
+                    ctx_idxs = np.random.randint(0, pos_idx, size=(self._ctxsize,))
                     ctxs = []
                     for ctx_idx in ctx_idxs:
                         ctxs.append(self._storage[traj_idx][ctx_idx][0])

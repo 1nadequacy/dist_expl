@@ -24,11 +24,13 @@ def render_env(env):
     except:
         pass
     return env.render(mode='rgb_array').copy()
+
     
 
 def evaluate_policy(env,
                     args,
                     policy,
+                    dist_policy,
                     tracker,
                     total_timesteps,
                     save_dir,
@@ -46,9 +48,17 @@ def evaluate_policy(env,
         sum_reward = 0
         timesteps = 0
         rollout = [state]
+        expl_bonuses = []
         while not done:
             with torch.no_grad():
                 action = policy.select_action(state, rollout)
+            ctx = policy.create_context(rollout)
+            with torch.no_grad():
+                dist, _ = dist_policy.get_distance(
+                    torch.FloatTensor(state).unsqueeze(0).to(policy.device),
+                    torch.FloatTensor(ctx).unsqueeze(0).to(policy.device))
+                expl_bonus = (dist > args.dist_threshold).float() * args.expl_coef
+                expl_bonuses.append(expl_bonus.sum().item())
             state, reward, done, _ = env.step(action)
             rollout.append(state)
             if render and i == 0:
@@ -65,6 +75,7 @@ def evaluate_policy(env,
             
         if args.env_type == 'ant':
              tracker.update('eval_episode_success', env.get_success(reward))
+        tracker.update('eval_expl_bonus', np.mean(expl_bonuses))
         tracker.update('eval_episode_reward', sum_reward)
         tracker.update('eval_episode_timesteps', timesteps)
         
@@ -109,7 +120,8 @@ def reset_env(env, args, eval_mode=False):
     
     while True:
         state = env.reset()
-        if abs(state[0]) < 0.05 or abs(state[1]) < 0.05:
+        #if abs(state[0]) > 0.25 or abs(state[1]) > 0.25:
+        if abs(state[0]) < 0.05 and abs(state[1]) > 0.05:
             break
     return state
 
@@ -125,7 +137,7 @@ def parse_args():
     parser.add_argument('--max_timesteps', default=1e6, type=int)
     parser.add_argument('--batch_size', default=512, type=int)
     parser.add_argument('--replay_buffer_size', default=1000000, type=int)
-    parser.add_argument('--state_buffer_size', default=100, type=int)
+    parser.add_argument('--ctx_buffer_size', default=10, type=int)
     parser.add_argument('--discount', default=0.99, type=float)
     parser.add_argument('--tau', default=0.005, type=float)
     parser.add_argument('--initial_temperature', default=0.01, type=float)
@@ -162,12 +174,12 @@ def main():
     max_action = float(env.action_space.high[0])
     max_episode_steps = calc_max_episode_steps(env, args.env_type)
 
-    replay_buffer = utils.ReplayBuffer(args.replay_buffer_size)
+    replay_buffer = utils.ReplayBuffer(args.replay_buffer_size, args.ctx_buffer_size)
     
     
     dist_policy = DistSAC(device, state_dim, action_dim, max_action, args.initial_temperature, args.lr, args.num_candidates)
     policy = GoalSAC(device, state_dim, action_dim, max_action,
-                 args.initial_temperature, args.lr)
+                 args.initial_temperature, args.lr, ctx_size=args.ctx_buffer_size)
      
     tracker = logger.StatsTracker()
     train_logger = logger.TrainLogger(
@@ -187,6 +199,7 @@ def main():
         env,
         args,
         policy,
+        dist_policy,
         tracker,
         total_timesteps,
         args.save_dir,
@@ -210,6 +223,7 @@ def main():
                     env,
                     args,
                     policy,
+                    dist_policy,
                     tracker,
                     total_timesteps,
                     args.save_dir,
