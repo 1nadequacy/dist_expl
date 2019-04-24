@@ -227,7 +227,6 @@ class GoalSAC(object):
         reward = torch.FloatTensor(reward).to(self.device).view(-1, 1)
         next_state = torch.FloatTensor(next_state).to(self.device)
         done = torch.FloatTensor(1 - done).to(self.device).view(-1, 1)
-        import ipdb; ipdb.set_trace()
         ctx = torch.FloatTensor(ctx).to(self.device)
         
         if expl_coef > 0:
