@@ -162,15 +162,9 @@ class GoalSAC(object):
     @property
     def alpha(self):
         return self.log_alpha.exp()
-    
-    def create_context(self, rollout):
-        ctx_size = np.random.randint(1, self.ctx_size + 1)
-        idxs = np.random.randint(0, len(rollout), size=(ctx_size,))
-        ctxs = [rollout[i] for i in idxs]
-        return np.array(ctxs)
 
-    def select_action(self, state, rollout):
-        ctx = self.create_context(rollout)
+
+    def select_action(self, state, ctx):
         with torch.no_grad():
             state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             ctx = torch.FloatTensor(ctx).unsqueeze(0).to(self.device)
@@ -178,8 +172,7 @@ class GoalSAC(object):
                 state, ctx, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten()
 
-    def sample_action(self, state, rollout):
-        ctx = self.create_context(rollout)
+    def sample_action(self, state, ctx):
         with torch.no_grad():
             state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
             ctx = torch.FloatTensor(ctx).unsqueeze(0).to(self.device)
@@ -201,11 +194,16 @@ class GoalSAC(object):
         # state: BxS
         # ctx: BxKxS
         # mask: Bx1
-        mask = mask.unsqueeze(1).expand_as(ctx).contiguous()
-        mask[:, 1:, :].fill_(0)
-        state = state.unsqueeze(1).expand_as(ctx)
-        
-        next_ctx = ctx * (1 - mask) + state * mask
+        if ctx.size(1) >= self.ctx_size:
+            
+            mask = mask.unsqueeze(1).expand_as(ctx).contiguous()
+            mask[:, 1:, :].fill_(0)
+            state = state.unsqueeze(1).expand_as(ctx)
+
+            next_ctx = ctx * (1 - mask) + state * mask
+            
+        else:
+            next_ctx = torch.cat([ctx, state.unsqueeze(1)], dim=1)
         return next_ctx
     
             
@@ -229,6 +227,7 @@ class GoalSAC(object):
         reward = torch.FloatTensor(reward).to(self.device).view(-1, 1)
         next_state = torch.FloatTensor(next_state).to(self.device)
         done = torch.FloatTensor(1 - done).to(self.device).view(-1, 1)
+        import ipdb; ipdb.set_trace()
         ctx = torch.FloatTensor(ctx).to(self.device)
         
         if expl_coef > 0:

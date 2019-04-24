@@ -138,24 +138,28 @@ class DistSAC(object):
     @property
     def alpha(self):
         return self.log_alpha.exp()
-
-    def get_distance(self, state, repeated_goal_state, idxs=None):
-        batch_size, num_goals, state_dim = repeated_goal_state.size()
+    
+    def get_distance_numpy(self, state, ctx):
+        state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        ctx = torch.FloatTensor(ctx).unsqueeze(0).to(self.device)
+        return self.get_distance(state, ctx)
+    
+    def get_distance(self, state, repeated_ctx):
+        
+        batch_size, num_goals, state_dim = repeated_ctx.size()
         repeated_state = state.unsqueeze(1).repeat(1, num_goals, 1)
         
         repeated_state = repeated_state.view(-1, state_dim)
-        repeated_goal_state = repeated_goal_state.view(-1, state_dim)
+        repeated_ctx = repeated_ctx.view(-1, state_dim)
         
-        repeated_action, _, _ = self.actor(repeated_state, repeated_goal_state, compute_pi=False, compute_log_pi=False)
-        q1, q2 = self.critic(repeated_state, repeated_goal_state, repeated_action)
+        repeated_action, _, _ = self.actor(repeated_state, repeated_ctx, compute_pi=False, compute_log_pi=False)
+        q1, q2 = self.critic(repeated_state, repeated_ctx, repeated_action)
         dist = -torch.min(q1, q2)
         dist = dist.view(batch_size, num_goals)
         
-        if idxs is None:
-            num_candidates = min(self.num_candidates, num_goals)
-            dist, idxs = dist.topk(num_candidates, dim=1, largest=False)
-        else:
-            dist = dist.gather(1, idxs)
+        
+        num_candidates = min(self.num_candidates, num_goals)
+        dist, idxs = dist.topk(num_candidates, dim=1, largest=False)
         dist = dist.mean(dim=1, keepdim=True)
         
         return dist, idxs

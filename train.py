@@ -47,20 +47,21 @@ def evaluate_policy(env,
         done = False
         sum_reward = 0
         timesteps = 0
-        rollout = [state]
+        ctx_buffer = utils.ContextBuffer(args.ctx_buffer_size, state.shape[0])
         expl_bonuses = []
         while not done:
+            ctx = ctx_buffer.get()
             with torch.no_grad():
-                action = policy.select_action(state, rollout)
-            ctx = policy.create_context(rollout)
-            with torch.no_grad():
-                dist, _ = dist_policy.get_distance(
-                    torch.FloatTensor(state).unsqueeze(0).to(policy.device),
-                    torch.FloatTensor(ctx).unsqueeze(0).to(policy.device))
-                expl_bonus = (dist > args.dist_threshold).float() * args.expl_coef
-                expl_bonuses.append(expl_bonus.sum().item())
+                action = policy.select_action(state, ctx)
+                dist, _ = dist_policy.get_distance_numpy(state, ctx)
+                
+            if dist.sum().item() > args.dist_threshold:
+                ctx_buffer.add(state)
+            
+            expl_bonus = (dist > args.dist_threshold).float()
+            expl_bonuses.append(expl_bonus.sum().item())
+            
             state, reward, done, _ = env.step(action)
-            rollout.append(state)
             if render and i == 0:
                 frames.append(render_env(env))
             sum_reward += reward
@@ -242,14 +243,7 @@ def main():
             state = reset_env(env, args)
             
              
-            rollout = [state]
-            
-            #if len(goal_buffer) > 0:
-            #    goal_state = torch.FloatTensor(goal_buffer.get()).to(device)
-            #    torch.save(goal_state, os.path.join(args.save_dir, 'goal_states.pt'))
-            #    repeated_goal_state = goal_state.unsqueeze(0).repeat(args.batch_size, 1, 1)
-            #else:
-            #    repeated_goal_state = None
+            ctx_buffer = utils.ContextBuffer(args.ctx_buffer_size, state_dim)
             
                 
             done = False
@@ -264,8 +258,14 @@ def main():
         if total_timesteps < args.start_timesteps:
             action = env.action_space.sample()
         else:
+            ctx = ctx_buffer.get()
+            
             with torch.no_grad():
-                action = policy.sample_action(state, rollout)
+                action = policy.sample_action(state, ctx)
+                dist, _ = dist_policy.get_distance_numpy(state, ctx)
+                
+            if dist.sum().item() > args.dist_threshold:
+                ctx_buffer.add(state)
             
 
         if total_timesteps >= 1e3:
@@ -284,18 +284,7 @@ def main():
         done_bool = 0 if episode_timesteps + 1 == max_episode_steps else float(done)
         episode_reward += reward
         
-        #if args.expl_coef > 0:
-        #    with torch.no_grad():
-        #        expl_bonus, _ = dist_policy.get_distance(
-        #            torch.FloatTensor(state).to(device), goal_states)
-        #        expl_bonus *= args.expl_coef
-        #    tracker.update('expl_bonus', expl_bonus)
-        #    reward += expl_bonus
-        
-        #if args.env_type == 'dmc' and reward > 0.5:
-        #    goal_buffer.add(new_state)
 
-        rollout.append(new_state)
         replay_buffer.add(state, action, reward, new_state, done_bool, done)
 
         state = new_state

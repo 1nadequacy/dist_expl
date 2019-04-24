@@ -132,25 +132,26 @@ class NormReplayBuffer(object):
     
     
     
-class StateBuffer(object):
-    def __init__(self, size):
-        self._storage = deque()
-        self._maxsize = size
-        self._cursize = 0
+class ContextBuffer(object):
+    def __init__(self, max_size, state_dim):
+        self.storage = []
+        self.max_size = max_size
+        self.state_dim = state_dim
         
     def add(self, state):
-        if self._cursize >= self._maxsize:
-            self._storage.popleft()
-            self._cursize -= 1
-            
-        self._storage.append(state)
-        self._cursize += 1
+        if len(self.storage) >= self.max_size:
+            idx = np.random.randint(0, len(self.storage))
+            self.storage[idx] = state
+        else:
+            self.storage.append(state)
         
     def __len__(self):
-        return len(self._storage)
+        return len(self.storage)
         
     def get(self):
-        return np.array([x for x in self._storage])
+        if len(self.storage) == 0:
+            return np.zeros((1, self.state_dim))
+        return np.array(self.storage)
 
 
 class ReplayBuffer(object):
@@ -191,6 +192,8 @@ class ReplayBuffer(object):
             goals = []
         if with_ctx:
             contexts = []
+            
+        ctx_size = np.random.randint(1, self._ctxsize + 1)
         
         for traj_idx, pos_idx in idxes:
             data = self._storage[traj_idx][pos_idx]
@@ -206,7 +209,7 @@ class ReplayBuffer(object):
                 obs_t = self._storage[traj_idx][goal_pos_idx][0]
                 goals.append(np.array(obs_t, copy=False))
             if with_ctx:
-                ctx_size = np.random.randint(1, self._ctxsize + 1)
+                
                 if pos_idx == 0:
                     ctxs = [np.zeros_like(obs_t) for _ in range(ctx_size)]
                 else:
