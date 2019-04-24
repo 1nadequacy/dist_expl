@@ -121,7 +121,7 @@ def reset_env(env, args, eval_mode=False):
     while True:
         state = env.reset()
         #if abs(state[0]) > 0.25 or abs(state[1]) > 0.25:
-        if abs(state[0]) < 0.05 and abs(state[1]) > 0.05:
+        if abs(state[0]) < 0.05 and abs(state[1]) < 0.05:
             break
     return state
 
