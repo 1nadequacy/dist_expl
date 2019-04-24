@@ -105,7 +105,7 @@ def print_baseline(task, baseline, data, color):
     plt.legend(loc='lower right', prop={'size': 7}).get_frame().set_edgecolor('0.1')
     
 
-def plot_experiment(task, exp_query, root='runs', exp_ids=None, train=False, value_name='eval_episode_reward', baselines_data=None, expert_data=None, max_time=None, best_k=None):
+def plot_experiment(task, exp_query, root='runs', exp_ids=None, train=False, value_name='eval_episode_reward', baselines_data=None, num_seeds=10, expert_data=None, max_time=None, best_k=None):
     root = os.path.join(root, task)
 
     experiments = set()
@@ -118,7 +118,7 @@ def plot_experiment(task, exp_query, root='runs', exp_ids=None, train=False, val
     exp_ids = list(range(len(experiments))) if exp_ids is None else exp_ids
     for exp_id, exp in enumerate(sorted(experiments)):
         if exp_id in exp_ids:
-            print_result(exp, task, num_seeds=10, train=train, value_name=value_name, max_time=max_time, best_k=best_k)
+            print_result(exp, task, num_seeds=num_seeds, train=train, value_name=value_name, max_time=max_time, best_k=best_k)
             
     if baselines_data is not None:
         print_baseline(task, 'ddpg', baselines_data, color='gray')
