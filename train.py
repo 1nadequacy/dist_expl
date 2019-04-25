@@ -7,6 +7,7 @@ import gym
 import sys
 import random
 import time
+import cv2
 
 import torch
 import torch.nn as nn
@@ -20,12 +21,12 @@ from GoalSAC import GoalSAC
 
 def render_env(env):
     try:
-        return env.render(mode='rgb_array', width=256, height=256, camera_id=0).copy()
+        return env.render(
+            mode='rgb_array', width=256, height=256, camera_id=0).copy()
     except:
         pass
     return env.render(mode='rgb_array').copy()
 
-    
 
 def evaluate_policy(env,
                     args,
@@ -54,16 +55,21 @@ def evaluate_policy(env,
             with torch.no_grad():
                 action = policy.select_action(state, ctx)
                 dist, _ = dist_policy.get_distance_numpy(state, ctx)
-                
+
             if dist.sum().item() > args.dist_threshold:
                 ctx_buffer.add(state)
-            
+
             expl_bonus = (dist > args.dist_threshold).float()
             expl_bonuses.append(expl_bonus.sum().item())
-            
+
             state, reward, done, _ = env.step(action)
             if render and i == 0:
                 frames.append(render_env(env))
+                if args.env_type == 'dmc' and args.domain_name == 'point_mass':
+                    for point in ctx_buffer.storage:
+                        x = int((point[0] + 0.3) / 0.6 * frames[-1].shape[0])
+                        y = int((-point[1] + 0.3) / 0.6 * frames[-1].shape[1])
+                        cv2.circle(frames[-1], (x, y), 3, (0, 0, 0))
             sum_reward += reward
             timesteps += 1
 
@@ -73,13 +79,13 @@ def evaluate_policy(env,
             ]
             file_name = os.path.join(video_dir, '%d.mp4' % total_timesteps)
             utils.save_gif(file_name, frames, color_last=True)
-            
+
         if args.env_type == 'ant':
-             tracker.update('eval_episode_success', env.get_success(reward))
+            tracker.update('eval_episode_success', env.get_success(reward))
         tracker.update('eval_expl_bonus', np.mean(expl_bonuses))
         tracker.update('eval_episode_reward', sum_reward)
         tracker.update('eval_episode_timesteps', timesteps)
-        
+
 
 def calc_max_episode_steps(env, env_type):
     if hasattr(env, '_max_episode_steps'):
@@ -118,11 +124,11 @@ def reset_env(env, args, eval_mode=False):
         return env.reset(eval_mode=eval_mode)
     if args.env_type != 'dmc' or args.domain_name != 'point_mass':
         return env.reset()
-    
+
     while True:
         state = env.reset()
         if abs(state[0]) > 0.25 or abs(state[1]) > 0.25:
-        #if abs(state[0]) < 0.05 and abs(state[1]) < 0.05:
+            #if abs(state[0]) < 0.05 and abs(state[1]) < 0.05:
             break
     return state
 
@@ -152,9 +158,9 @@ def parse_args():
     parser.add_argument('--lr', default=1e-3, type=float)
     parser.add_argument('--expl_coef', default=0., type=float)
     parser.add_argument('--dist_threshold', default=10, type=float)
-    parser.add_argument('--use_pot', default=0, type=int)
+    parser.add_argument('--use_l2', default=0, type=int)
     parser.add_argument('--num_candidates', default=1, type=int)
-    
+
     args = parser.parse_args()
     return args
 
@@ -166,7 +172,7 @@ def main():
     # Set seeds
     utils.set_seed_everywhere(args.seed)
     env.seed(args.seed)
-    
+
     utils.make_dir(args.save_dir)
     utils.make_dir(os.path.join(args.save_dir, 'model'))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -176,13 +182,27 @@ def main():
     max_action = float(env.action_space.high[0])
     max_episode_steps = calc_max_episode_steps(env, args.env_type)
 
-    replay_buffer = utils.ReplayBuffer(args.replay_buffer_size, args.ctx_buffer_size)
-    
-    
-    dist_policy = DistSAC(device, state_dim, action_dim, max_action, args.initial_temperature, args.lr, args.num_candidates)
-    policy = GoalSAC(device, state_dim, action_dim, max_action,
-                 args.initial_temperature, args.lr, ctx_size=args.ctx_buffer_size)
-     
+    replay_buffer = utils.ReplayBuffer(args.replay_buffer_size,
+                                       args.ctx_buffer_size)
+
+    dist_policy = DistSAC(
+        device,
+        state_dim,
+        action_dim,
+        max_action,
+        args.initial_temperature,
+        args.lr,
+        args.num_candidates,
+        use_l2=args.use_l2)
+    policy = GoalSAC(
+        device,
+        state_dim,
+        action_dim,
+        max_action,
+        args.initial_temperature,
+        args.lr,
+        ctx_size=args.ctx_buffer_size)
+
     tracker = logger.StatsTracker()
     train_logger = logger.TrainLogger(
         args.log_format, file_name=os.path.join(args.save_dir, 'train.log'))
@@ -196,7 +216,6 @@ def main():
     episode_timesteps = 0
     done = True
 
-    
     evaluate_policy(
         env,
         args,
@@ -214,7 +233,8 @@ def main():
 
         if done:
             if total_timesteps != 0:
-                tracker.update('fps', episode_timesteps / (time.time() - start_time))
+                tracker.update('fps',
+                               episode_timesteps / (time.time() - start_time))
                 start_time = time.time()
                 train_logger.dump(tracker)
 
@@ -241,11 +261,9 @@ def main():
             tracker.update('train_episode_timesteps', episode_timesteps)
             # Reset environment
             state = reset_env(env, args)
-            
-             
+
             ctx_buffer = utils.ContextBuffer(args.ctx_buffer_size, state_dim)
-            
-                
+
             done = False
             episode_reward = 0
             episode_timesteps = 0
@@ -259,36 +277,46 @@ def main():
             action = env.action_space.sample()
         else:
             ctx = ctx_buffer.get()
-            
+
             with torch.no_grad():
                 action = policy.sample_action(state, ctx)
                 dist, _ = dist_policy.get_distance_numpy(state, ctx)
-                
+
             if dist.sum().item() > args.dist_threshold:
                 ctx_buffer.add(state)
-            
 
         if total_timesteps >= 1e3:
-            dist_policy.train(replay_buffer, total_timesteps, tracker,
-                                  args.batch_size, args.discount, args.tau,
-                                  args.policy_freq, target_entropy=-action_dim)
+            dist_policy.train(
+                replay_buffer,
+                total_timesteps,
+                tracker,
+                args.batch_size,
+                args.discount,
+                args.tau,
+                args.policy_freq,
+                target_entropy=-action_dim)
 
-            
-            policy.train(replay_buffer, total_timesteps, dist_policy, tracker,
-                         args.batch_size, args.discount, args.tau,
-                         args.policy_freq, target_entropy=-action_dim,
-                         expl_coef=args.expl_coef, dist_threshold=args.dist_threshold)
-            
-            
+            policy.train(
+                replay_buffer,
+                total_timesteps,
+                dist_policy,
+                tracker,
+                args.batch_size,
+                args.discount,
+                args.tau,
+                args.policy_freq,
+                target_entropy=-action_dim,
+                expl_coef=args.expl_coef,
+                dist_threshold=args.dist_threshold)
+
         new_state, reward, done, _ = env.step(action)
-        done_bool = 0 if episode_timesteps + 1 == max_episode_steps else float(done)
+        done_bool = 0 if episode_timesteps + 1 == max_episode_steps else float(
+            done)
         episode_reward += reward
-        
 
         replay_buffer.add(state, action, reward, new_state, done_bool, done)
 
         state = new_state
-        
 
         episode_timesteps += 1
         total_timesteps += 1

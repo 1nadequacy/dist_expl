@@ -205,7 +205,7 @@ class ReplayBuffer(object):
             dones.append(done)
             
             if with_goal:
-                goal_pos_idx = random.randint(pos_idx, len(self._storage[traj_idx]) - 1)
+                goal_pos_idx = np.random.randint(0, pos_idx + 1)
                 obs_t = self._storage[traj_idx][goal_pos_idx][0]
                 goals.append(np.array(obs_t, copy=False))
             if with_ctx:

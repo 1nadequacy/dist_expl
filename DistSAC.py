@@ -115,7 +115,8 @@ class DistSAC(object):
                  lr=1e-3,
                  num_candidates=1,
                  log_std_min=-20,
-                 log_std_max=2):
+                 log_std_max=2,
+                 use_l2=False):
         self.device = device
         
         self.num_candidates = num_candidates
@@ -133,6 +134,7 @@ class DistSAC(object):
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
 
         self.max_action = max_action
+        self.use_l2 = use_l2
         
 
     @property
@@ -145,23 +147,29 @@ class DistSAC(object):
         return self.get_distance(state, ctx)
     
     def get_distance(self, state, repeated_ctx):
-        
         batch_size, num_goals, state_dim = repeated_ctx.size()
         repeated_state = state.unsqueeze(1).repeat(1, num_goals, 1)
         
-        repeated_state = repeated_state.view(-1, state_dim)
-        repeated_ctx = repeated_ctx.view(-1, state_dim)
-        
-        repeated_action, _, _ = self.actor(repeated_state, repeated_ctx, compute_pi=False, compute_log_pi=False)
-        q1, q2 = self.critic(repeated_state, repeated_ctx, repeated_action)
-        dist = -torch.min(q1, q2)
-        dist = dist.view(batch_size, num_goals)
-        
-        
+        if self.use_l2:
+            diff = repeated_state[:, :, :2] - repeated_ctx[:, :, :2]
+            dist = diff.pow(2).sum(dim=-1).pow(0.5)
+        else:    
+            batch_size, num_goals, state_dim = repeated_ctx.size()
+            repeated_state = state.unsqueeze(1).repeat(1, num_goals, 1)
+
+            repeated_state = repeated_state.view(-1, state_dim)
+            repeated_ctx = repeated_ctx.view(-1, state_dim)
+
+            repeated_action, _, _ = self.actor(repeated_state, repeated_ctx, compute_pi=False, compute_log_pi=False)
+            q1, q2 = self.critic(repeated_state, repeated_ctx, repeated_action)
+            dist = -torch.min(q1, q2)
+            dist = dist.view(batch_size, num_goals)
+
+
         num_candidates = min(self.num_candidates, num_goals)
         dist, idxs = dist.topk(num_candidates, dim=1, largest=False)
         dist = dist.mean(dim=1, keepdim=True)
-        
+
         return dist, idxs
     
     def train(self,
@@ -184,14 +192,13 @@ class DistSAC(object):
         
         perm = torch.randperm(state.size(0))
         mask_noise = torch.rand(state.size(0), 1).to(self.device)
-        random_goal_mask = (mask_noise < 0.1).float()
         same_goal_mask = (mask_noise > 0.9).float()
-        traj_goal_mask = 1 - (random_goal_mask + same_goal_mask)
+        traj_goal_mask = 1 - same_goal_mask
 
-        assert ((random_goal_mask + same_goal_mask + traj_goal_mask) - 1.0).norm() < 1e-3
-        assert (random_goal_mask * same_goal_mask * traj_goal_mask).norm() < 1e-3
+        assert ((same_goal_mask + traj_goal_mask) - 1.0).norm() < 1e-3
+        assert (same_goal_mask * traj_goal_mask).norm() < 1e-3
 
-        goals = state[perm] * random_goal_mask + state * same_goal_mask + goals * traj_goal_mask
+        goals = state * same_goal_mask + goals * traj_goal_mask
 
         done = ((state - goals).norm(dim=-1, keepdim=True) < 1e-5).float()
         reward = -(1 - done) 
