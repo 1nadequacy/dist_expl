@@ -49,7 +49,6 @@ def evaluate_policy(env,
         sum_reward = 0
         timesteps = 0
         ctx_buffer = utils.ContextBuffer(args.ctx_buffer_size, state.shape[0])
-        expl_bonuses = []
         while not done:
             ctx = ctx_buffer.get()
             with torch.no_grad():
@@ -58,9 +57,6 @@ def evaluate_policy(env,
 
             if dist.sum().item() > args.dist_threshold:
                 ctx_buffer.add(state)
-
-            expl_bonus = (dist > args.dist_threshold).float()
-            expl_bonuses.append(expl_bonus.sum().item())
 
             state, reward, done, _ = env.step(action)
             if render and i == 0:
@@ -82,7 +78,6 @@ def evaluate_policy(env,
 
         if args.env_type == 'ant':
             tracker.update('eval_episode_success', env.get_success(reward))
-        tracker.update('eval_expl_bonus', np.mean(expl_bonuses))
         tracker.update('eval_episode_reward', sum_reward)
         tracker.update('eval_episode_timesteps', timesteps)
 
@@ -286,28 +281,33 @@ def main():
                 ctx_buffer.add(state)
 
         if total_timesteps >= 1e3:
-            dist_policy.train(
-                replay_buffer,
-                total_timesteps,
-                tracker,
-                args.batch_size,
-                args.discount,
-                args.tau,
-                args.policy_freq,
-                target_entropy=-action_dim)
+            num_updates = int(1e3) if total_timesteps == 1e3 else 1
+            for _ in range(num_updates):
+                dist_policy.train(
+                    replay_buffer,
+                    total_timesteps,
+                    tracker,
+                    args.batch_size,
+                    args.discount,
+                    args.tau,
+                    args.policy_freq,
+                    target_entropy=-action_dim)
 
-            policy.train(
-                replay_buffer,
-                total_timesteps,
-                dist_policy,
-                tracker,
-                args.batch_size,
-                args.discount,
-                args.tau,
-                args.policy_freq,
-                target_entropy=-action_dim,
-                expl_coef=args.expl_coef,
-                dist_threshold=args.dist_threshold)
+        if total_timesteps >= args.start_timesteps:
+            num_updates = args.start_timesteps if total_timesteps == args.start_timesteps else 1
+            for _ in range(num_updates):
+                policy.train(
+                    replay_buffer,
+                    total_timesteps,
+                    dist_policy,
+                    tracker,
+                    args.batch_size,
+                    args.discount,
+                    args.tau,
+                    args.policy_freq,
+                    target_entropy=-action_dim,
+                    expl_coef=args.expl_coef,
+                    dist_threshold=args.dist_threshold)
 
         new_state, reward, done, _ = env.step(action)
         done_bool = 0 if episode_timesteps + 1 == max_episode_steps else float(
