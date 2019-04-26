@@ -139,7 +139,7 @@ def parse_args():
     parser.add_argument('--max_timesteps', default=1e6, type=int)
     parser.add_argument('--batch_size', default=512, type=int)
     parser.add_argument('--replay_buffer_size', default=1000000, type=int)
-    parser.add_argument('--ctx_buffer_size', default=10, type=int)
+    parser.add_argument('--ctx_buffer_size', default=20, type=int)
     parser.add_argument('--discount', default=0.99, type=float)
     parser.add_argument('--tau', default=0.005, type=float)
     parser.add_argument('--initial_temperature', default=0.01, type=float)
@@ -291,7 +291,8 @@ def main():
                     args.discount,
                     args.tau,
                     args.policy_freq,
-                    target_entropy=-action_dim)
+                    target_entropy=-action_dim,
+                    mse_pretraining=total_timesteps < args.start_timesteps)
 
         if total_timesteps >= args.start_timesteps:
             num_updates = args.start_timesteps if total_timesteps == args.start_timesteps else 1

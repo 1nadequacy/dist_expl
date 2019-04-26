@@ -128,6 +128,7 @@ class DistSAC(object):
         self.critic_target = Critic(state_dim, action_dim).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
+        self.mse_critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
 
         self.log_alpha = torch.tensor(np.log(initial_temperature)).to(device)
         self.log_alpha.requires_grad = True
@@ -180,15 +181,17 @@ class DistSAC(object):
               discount=0.99,
               tau=0.005,
               policy_freq=2,
-              target_entropy=None):
+              target_entropy=None,
+              mse_pretraining=False):
         
         # Sample replay buffer
-        state, action, _, next_state, _, goals = replay_buffer.sample(
+        state, action, _, next_state, _, goals, dists = replay_buffer.sample(
                 batch_size, with_goal=True)
         state = torch.FloatTensor(state).to(self.device)
         action = torch.FloatTensor(action).to(self.device)
         next_state = torch.FloatTensor(next_state).to(self.device)
         goals = torch.FloatTensor(goals).to(self.device)
+        dists = torch.FloatTensor(dists).to(self.device).unsqueeze(-1)
         
         perm = torch.randperm(state.size(0))
         mask_noise = torch.rand(state.size(0), 1).to(self.device)
@@ -201,11 +204,26 @@ class DistSAC(object):
         goals = state * same_goal_mask + goals * traj_goal_mask
 
         done = ((state - goals).norm(dim=-1, keepdim=True) < 1e-5).float()
-        reward = -(1 - done) 
+        reward = -(1 - done)
         
         tracker.update('dist_train_reward', reward.sum().item(), reward.size(0))
         
+        def fit_critic_mse():
+            # Get current Q estimates
+            current_Q1, current_Q2 = self.critic(state, goals, action)
 
+            # Compute critic loss
+            target = -(1 - discount ** dists) / (1 - discount)
+            critic_loss = F.mse_loss(current_Q1, target) + F.mse_loss(
+                current_Q2, target)
+            tracker.update('dist_critic_loss', critic_loss * current_Q1.size(0),
+                           current_Q1.size(0))
+            
+            # Optimize the critic
+            self.mse_critic_optimizer.zero_grad()
+            critic_loss.backward()
+            self.mse_critic_optimizer.step()
+        
         def fit_critic():
             with torch.no_grad():
                 _, policy_action, log_pi = self.actor(next_state, goals)
@@ -229,7 +247,10 @@ class DistSAC(object):
             critic_loss.backward()
             self.critic_optimizer.step()
 
-        fit_critic()
+        if mse_pretraining:
+            fit_critic_mse()
+        else:
+            fit_critic()
 
         def fit_actor():
             # Compute actor loss
@@ -257,8 +278,11 @@ class DistSAC(object):
         if total_timesteps % policy_freq == 0:
             fit_actor()
             
-            utils.soft_update_params(self.critic, self.critic_target, tau)
-
+            if mse_pretraining:
+                utils.soft_update_params(self.critic, self.critic_target, 1.0)
+            else:
+                utils.soft_update_params(self.critic, self.critic_target, tau)
+                
     def save(self, directory, timestep):
         torch.save(self.actor.state_dict(),
                    '%s/model/dist_actor_%s.pt' % (directory, timestep))

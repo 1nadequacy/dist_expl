@@ -190,6 +190,7 @@ class ReplayBuffer(object):
         obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
         if with_goal:
             goals = []
+            dists = []
         if with_ctx:
             contexts = []
             
@@ -208,6 +209,7 @@ class ReplayBuffer(object):
                 goal_pos_idx = np.random.randint(0, pos_idx + 1)
                 obs_t = self._storage[traj_idx][goal_pos_idx][0]
                 goals.append(np.array(obs_t, copy=False))
+                dists.append(pos_idx - goal_pos_idx)
             if with_ctx:
                 
                 if pos_idx == 0:
@@ -220,7 +222,7 @@ class ReplayBuffer(object):
                 contexts.append(np.array(ctxs))
             
         if with_goal:
-            return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals)
+            return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(goals), np.array(dists)
         elif with_ctx:
             return np.array(obses_t), np.array(actions), np.array(rewards), np.array(obses_tp1), np.array(dones), np.array(contexts)
         else:
