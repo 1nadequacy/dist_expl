@@ -227,17 +227,17 @@ class GoalSAC(object):
         done = torch.FloatTensor(1 - done).to(self.device).view(-1, 1)
         ctx = torch.FloatTensor(ctx).to(self.device)
         
-        if expl_coef > 0:
-            with torch.no_grad():
-                dist, _ = dist_policy.get_distance(state, ctx)
-            novel_mask = (dist > dist_threshold).float()
-            expl_bonus = novel_mask * expl_coef
-            tracker.update('expl_bonus', expl_bonus.sum().item(), expl_bonus.size(0))
-            next_ctx = self.update_context(state, ctx, novel_mask)
+        assert expl_coef > 0
+        
+        with torch.no_grad():
+            dist, _ = dist_policy.get_distance(state, ctx)
+        novel_mask = (dist > dist_threshold).float()
+        expl_bonus = novel_mask * expl_coef
+        tracker.update('expl_bonus', expl_bonus.sum().item(), expl_bonus.size(0))
+        next_ctx = self.update_context(state, ctx, novel_mask)
 
-            reward += expl_bonus.detach()
-        else:
-            next_ctx = ctx
+        reward += expl_bonus.detach()
+        
             
         
         tracker.update('train_reward', reward.sum().item(), reward.size(0))

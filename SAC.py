@@ -110,7 +110,8 @@ class SAC(object):
                  initial_temperature,
                  lr=1e-3,
                  log_std_min=-20,
-                 log_std_max=2):
+                 log_std_max=2,
+                 ctx_size=None):
         self.device = device
 
         self.actor = Actor(state_dim, action_dim, log_std_min, log_std_max).to(device)
@@ -130,14 +131,16 @@ class SAC(object):
     def alpha(self):
         return self.log_alpha.exp()
 
-    def select_action(self, state):
+    def select_action(self, state, ctx):
+        # ctx should be unused
         with torch.no_grad():
             state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
             mu, _, _ = self.actor(
                 state, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten()
 
-    def sample_action(self, state):
+    def sample_action(self, state, ctx):
+        # ctx should be unused
         with torch.no_grad():
             state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
             mu, pi, _ = self.actor(state, compute_log_pi=False)
@@ -153,17 +156,6 @@ class SAC(object):
             targets.append(torch.min(target_Q1, target_Q2))
         target = torch.cat(targets, dim=1).mean(dim=1)
         return target
-    
-    def compute_bonus(self, dist_policy, state, next_state, repeated_goal, use_pot, discount):
-        if use_pot:
-            with torch.no_grad():
-                state_bonus, idxs = dist_policy.get_distance(state, repeated_goal)
-                next_state_bonus, _ = dist_policy.get_distance(next_state, repeated_goal, idxs)
-            return next_state_bonus * discount - state_bonus
-        else:
-            with torch.no_grad():
-                state_bonus, _ = dist_policy.get_distance(state, repeated_goal)
-            return state_bonus
             
     def train(self,
               replay_buffer,
@@ -176,10 +168,7 @@ class SAC(object):
               policy_freq=2,
               target_entropy=None,
               expl_coef=0.0,
-              repeated_start_state=None,
-              goal_coef=0.0,
-              repeated_goal_state=None,
-              use_pot=False):
+              dist_threshold=10):
         # Sample replay buffer
         state, action, reward, next_state, done = replay_buffer.sample(
                 batch_size)
@@ -188,21 +177,8 @@ class SAC(object):
         reward = torch.FloatTensor(reward).to(self.device).view(-1, 1)
         next_state = torch.FloatTensor(next_state).to(self.device)
         done = torch.FloatTensor(1 - done).to(self.device).view(-1, 1)
+        assert expl_coef == 0
         
-        if expl_coef > 0:
-            expl_bonus = self.compute_bonus(dist_policy, state, next_state, repeated_start_state,
-                                       use_pot, discount)
-            expl_bonus *= expl_coef
-            tracker.update('expl_bonus', expl_bonus.sum(), expl_bonus.size(0))
-            reward += expl_bonus
-            
-        if goal_coef > 0 and repeated_goal_state is not None:
-            goal_bonus = self.compute_bonus(dist_policy, state, next_state, repeated_goal_state,
-                                       use_pot, discount)
-            goal_bonus *= goal_coef
-            tracker.update('goal_bonus', goal_bonus.sum(), goal_bonus.size(0))
-            reward -= goal_bonus
-            
         
         tracker.update('train_reward', reward.sum().item(), reward.size(0))
 

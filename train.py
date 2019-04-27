@@ -185,7 +185,8 @@ def main():
         args.lr,
         args.num_candidates,
         use_l2=args.use_l2)
-    policy = GoalSAC(
+    policy_model = GoalSAC if args.expl_coef > 0 else SAC
+    policy = policy_model(
         device,
         state_dim,
         action_dim,
@@ -275,7 +276,7 @@ def main():
             if dist.sum().item() > args.dist_threshold:
                 ctx_buffer.add(state)
 
-        if total_timesteps >= 1e3:
+        if total_timesteps >= 1e3 and args.expl_coef > 0:
             num_updates = int(1e3) if total_timesteps == 1e3 else 1
             for _ in range(num_updates):
                 dist_policy.train(
