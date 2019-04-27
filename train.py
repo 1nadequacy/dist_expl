@@ -89,8 +89,6 @@ def calc_max_episode_steps(env, env_type):
         return env.env._max_episode_steps
     if env_type == 'dmc':
         return 1000
-    if env_type == 'ant':
-        return 500
     return 100000
 
 
@@ -107,8 +105,7 @@ def make_env(args):
         env = gym.make(args.env_name)
     elif args.env_type == 'ant':
         import ant_env_mujoco
-        env = ant_env_mujoco.EnvWithGoal(
-            ant_env_mujoco.create_maze_env(args.env_name), args.env_name)
+        env = gym.make(args.env_name)
     else:
         assert 'unknown env type: %s' % args.env_type
     return env
@@ -162,19 +159,19 @@ def parse_args():
 
 def main():
     args = parse_args()
-    env = make_env(args)
-
-    # Set seeds
     utils.set_seed_everywhere(args.seed)
+    
+    env = make_env(args)
     env.seed(args.seed)
-
+    
     utils.make_dir(args.save_dir)
     utils.make_dir(os.path.join(args.save_dir, 'model'))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
-    max_action = float(env.action_space.high[0])
+    assert env.action_space.low.min() >= -1
+    assert env.action_space.high.max() <= 1
     max_episode_steps = calc_max_episode_steps(env, args.env_type)
 
     replay_buffer = utils.ReplayBuffer(args.replay_buffer_size,
@@ -184,7 +181,6 @@ def main():
         device,
         state_dim,
         action_dim,
-        max_action,
         args.initial_temperature,
         args.lr,
         args.num_candidates,
@@ -193,7 +189,6 @@ def main():
         device,
         state_dim,
         action_dim,
-        max_action,
         args.initial_temperature,
         args.lr,
         ctx_size=args.ctx_buffer_size)
@@ -291,8 +286,7 @@ def main():
                     args.discount,
                     args.tau,
                     args.policy_freq,
-                    target_entropy=-action_dim,
-                    mse_pretraining=total_timesteps < args.start_timesteps)
+                    target_entropy=-action_dim)
 
         if total_timesteps >= args.start_timesteps:
             num_updates = args.start_timesteps if total_timesteps == args.start_timesteps else 1

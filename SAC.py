@@ -34,7 +34,7 @@ def weight_init(m):
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, max_action, log_std_min=-20, log_std_max=2):
+    def __init__(self, state_dim, action_dim, log_std_min=-20, log_std_max=2):
         super(Actor, self).__init__()
         
         self.log_std_min = log_std_min
@@ -107,14 +107,13 @@ class SAC(object):
                  device,
                  state_dim,
                  action_dim,
-                 max_action,
                  initial_temperature,
                  lr=1e-3,
                  log_std_min=-20,
                  log_std_max=2):
         self.device = device
 
-        self.actor = Actor(state_dim, action_dim, max_action, log_std_min, log_std_max).to(device)
+        self.actor = Actor(state_dim, action_dim, log_std_min, log_std_max).to(device)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr)
 
         self.critic = Critic(state_dim, action_dim).to(device)
@@ -126,8 +125,6 @@ class SAC(object):
         self.log_alpha.requires_grad = True
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
 
-        self.max_action = max_action
-        
 
     @property
     def alpha(self):

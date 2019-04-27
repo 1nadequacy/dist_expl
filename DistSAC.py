@@ -34,7 +34,7 @@ def weight_init(m):
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, max_action, log_std_min=-20, log_std_max=2):
+    def __init__(self, state_dim, action_dim, log_std_min=-20, log_std_max=2):
         super(Actor, self).__init__()
         
         self.log_std_min = log_std_min
@@ -110,7 +110,6 @@ class DistSAC(object):
                  device,
                  state_dim,
                  action_dim,
-                 max_action,
                  initial_temperature,
                  lr=1e-3,
                  num_candidates=1,
@@ -121,20 +120,18 @@ class DistSAC(object):
         
         self.num_candidates = num_candidates
 
-        self.actor = Actor(state_dim, action_dim, max_action, log_std_min, log_std_max).to(device)
+        self.actor = Actor(state_dim, action_dim, log_std_min, log_std_max).to(device)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr)
 
         self.critic = Critic(state_dim, action_dim).to(device)
         self.critic_target = Critic(state_dim, action_dim).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
-        self.mse_critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
 
         self.log_alpha = torch.tensor(np.log(initial_temperature)).to(device)
         self.log_alpha.requires_grad = True
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
 
-        self.max_action = max_action
         self.use_l2 = use_l2
         
 
@@ -181,17 +178,15 @@ class DistSAC(object):
               discount=0.99,
               tau=0.005,
               policy_freq=2,
-              target_entropy=None,
-              mse_pretraining=False):
+              target_entropy=None):
         
         # Sample replay buffer
-        state, action, _, next_state, _, goals, dists = replay_buffer.sample(
+        state, action, _, next_state, _, goals, _ = replay_buffer.sample(
                 batch_size, with_goal=True)
         state = torch.FloatTensor(state).to(self.device)
         action = torch.FloatTensor(action).to(self.device)
         next_state = torch.FloatTensor(next_state).to(self.device)
         goals = torch.FloatTensor(goals).to(self.device)
-        dists = torch.FloatTensor(dists).to(self.device).unsqueeze(-1)
         
         perm = torch.randperm(state.size(0))
         mask_noise = torch.rand(state.size(0), 1).to(self.device)
@@ -207,22 +202,6 @@ class DistSAC(object):
         reward = -(1 - done)
         
         tracker.update('dist_train_reward', reward.sum().item(), reward.size(0))
-        
-        def fit_critic_mse():
-            # Get current Q estimates
-            current_Q1, current_Q2 = self.critic(state, goals, action)
-
-            # Compute critic loss
-            target = -(1 - discount ** dists) / (1 - discount)
-            critic_loss = F.mse_loss(current_Q1, target) + F.mse_loss(
-                current_Q2, target)
-            tracker.update('dist_critic_loss', critic_loss * current_Q1.size(0),
-                           current_Q1.size(0))
-            
-            # Optimize the critic
-            self.mse_critic_optimizer.zero_grad()
-            critic_loss.backward()
-            self.mse_critic_optimizer.step()
         
         def fit_critic():
             with torch.no_grad():
@@ -247,10 +226,8 @@ class DistSAC(object):
             critic_loss.backward()
             self.critic_optimizer.step()
 
-        if mse_pretraining:
-            fit_critic_mse()
-        else:
-            fit_critic()
+        
+        fit_critic()
 
         def fit_actor():
             # Compute actor loss
@@ -278,10 +255,7 @@ class DistSAC(object):
         if total_timesteps % policy_freq == 0:
             fit_actor()
             
-            if mse_pretraining:
-                utils.soft_update_params(self.critic, self.critic_target, 1.0)
-            else:
-                utils.soft_update_params(self.critic, self.critic_target, tau)
+            utils.soft_update_params(self.critic, self.critic_target, tau)
                 
     def save(self, directory, timestep):
         torch.save(self.actor.state_dict(),
