@@ -276,7 +276,7 @@ def main():
             if dist.sum().item() > args.dist_threshold:
                 ctx_buffer.add(state)
 
-        if total_timesteps >= 1e3 and args.expl_coef > 0:
+        if total_timesteps >= 1e3 and args.expl_coef > 0 and args.use_l2 == 0:
             num_updates = int(1e3) if total_timesteps == 1e3 else 1
             for _ in range(num_updates):
                 dist_policy.train(
