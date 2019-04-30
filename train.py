@@ -16,7 +16,6 @@ import logger
 import utils
 from SAC import SAC
 from DistSAC import DistSAC
-from GoalSAC import GoalSAC
 
 
 def render_env(env):
@@ -26,6 +25,20 @@ def render_env(env):
     except:
         pass
     return env.render(mode='rgb_array').copy()
+
+
+def calc_point_xy(env_name, point, shape):
+    if env_name.startswith('AntMaze'):
+        x1, x2, y1, y2 = -16, 32, 32, -16
+    elif env_name.startswith('AntPush'):
+        x1, x2, y1, y2 = -24, 24, 32, -16
+    elif env_name.startswith('AntFall'):
+        x1, x2, y1, y2 = -19, 29, 29, -13
+    
+    x = int((point[0] - x1) / (x2 - x1) * shape[0])
+    y = int((point[1] - y1) / (y2 - y1) * shape[1])
+    return x, y
+       
 
 
 def evaluate_policy(env,
@@ -48,24 +61,23 @@ def evaluate_policy(env,
         done = False
         sum_reward = 0
         timesteps = 0
-        ctx_buffer = utils.ContextBuffer(args.ctx_buffer_size, state.shape[0])
+        #ctx_buffer = utils.ContextBuffer(args.ctx_buffer_size, state.shape[0])
         while not done:
-            ctx = ctx_buffer.get()
+            #ctx = ctx_buffer.get()
             with torch.no_grad():
-                action = policy.select_action(state, ctx)
-                dist, _ = dist_policy.get_distance_numpy(state, ctx)
+                action = policy.select_action(state)
+                #dist, _ = dist_policy.get_distance_numpy(state, ctx)
 
-            if dist.sum().item() > args.dist_threshold:
-                ctx_buffer.add(state)
+            #if dist.sum().item() > args.dist_threshold:
+            #    ctx_buffer.add(state)
 
             state, reward, done, _ = env.step(action)
             if render and i == 0:
                 frames.append(render_env(env))
-                if args.env_type == 'dmc' and args.domain_name == 'point_mass':
-                    for point in ctx_buffer.storage:
-                        x = int((point[0] + 0.3) / 0.6 * frames[-1].shape[0])
-                        y = int((-point[1] + 0.3) / 0.6 * frames[-1].shape[1])
-                        cv2.circle(frames[-1], (x, y), 3, (0, 0, 0))
+                if args.env_type == 'ant':
+                    for point in []:
+                        x, y = calc_point_xy(args.env_name, point, frames[-1].shape)
+                        cv2.circle(frames[-1], (x, y), 1, (255, 255, 0), 5)
             sum_reward += reward
             timesteps += 1
 
@@ -151,6 +163,7 @@ def parse_args():
     parser.add_argument('--expl_coef', default=0., type=float)
     parser.add_argument('--dist_threshold', default=10, type=float)
     parser.add_argument('--use_l2', default=0, type=int)
+    parser.add_argument('--only_pos', default=0, type=int)
     parser.add_argument('--num_candidates', default=1, type=int)
 
     args = parser.parse_args()
@@ -184,9 +197,9 @@ def main():
         args.initial_temperature,
         args.lr,
         args.num_candidates,
-        use_l2=args.use_l2)
-    policy_model = GoalSAC if args.expl_coef > 0 else SAC
-    policy = policy_model(
+        use_l2=args.use_l2,
+        only_pos=args.only_pos)
+    policy = SAC(
         device,
         state_dim,
         action_dim,
@@ -253,7 +266,7 @@ def main():
             # Reset environment
             state = reset_env(env, args)
 
-            ctx_buffer = utils.ContextBuffer(args.ctx_buffer_size, state_dim)
+            #ctx_buffer = utils.ContextBuffer(args.ctx_buffer_size, state_dim)
 
             done = False
             episode_reward = 0
@@ -267,14 +280,14 @@ def main():
         if total_timesteps < args.start_timesteps:
             action = env.action_space.sample()
         else:
-            ctx = ctx_buffer.get()
+            #ctx = ctx_buffer.get()
 
             with torch.no_grad():
-                action = policy.sample_action(state, ctx)
-                dist, _ = dist_policy.get_distance_numpy(state, ctx)
+                action = policy.sample_action(state)
+                #dist, _ = dist_policy.get_distance_numpy(state, ctx)
 
-            if dist.sum().item() > args.dist_threshold:
-                ctx_buffer.add(state)
+            #if dist.sum().item() > args.dist_threshold:
+            #    ctx_buffer.add(state)
 
         if total_timesteps >= 1e3 and args.expl_coef > 0 and args.use_l2 == 0:
             num_updates = int(1e3) if total_timesteps == 1e3 else 1

@@ -131,7 +131,7 @@ class SAC(object):
     def alpha(self):
         return self.log_alpha.exp()
 
-    def select_action(self, state, ctx):
+    def select_action(self, state):
         # ctx should be unused
         with torch.no_grad():
             state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
@@ -139,7 +139,7 @@ class SAC(object):
                 state, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten()
 
-    def sample_action(self, state, ctx):
+    def sample_action(self, state):
         # ctx should be unused
         with torch.no_grad():
             state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
@@ -177,7 +177,16 @@ class SAC(object):
         reward = torch.FloatTensor(reward).to(self.device).view(-1, 1)
         next_state = torch.FloatTensor(next_state).to(self.device)
         done = torch.FloatTensor(1 - done).to(self.device).view(-1, 1)
-        assert expl_coef == 0
+        
+        if expl_coef > 0:
+            ctx = torch.zeros_like(state).to(self.device)
+            ctx = ctx.unsqueeze(1)
+            with torch.no_grad():
+                dist, _ = dist_policy.get_distance(state, ctx)
+            expl_bonus = dist * expl_coef
+            tracker.update('expl_bonus', expl_bonus.sum().item(), expl_bonus.size(0))
+            reward += expl_bonus.detach()
+            
         
         
         tracker.update('train_reward', reward.sum().item(), reward.size(0))

@@ -34,19 +34,23 @@ def weight_init(m):
 
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, log_std_min=-20, log_std_max=2):
+    def __init__(self, state_dim, action_dim, log_std_min=-20, log_std_max=2, only_pos=False):
         super(Actor, self).__init__()
+        self.only_pos = only_pos
         
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
 
-        self.l1 = nn.Linear(2 * state_dim, 256)
+        input_dim = state_dim + (2 if only_pos else state_dim)
+        self.l1 = nn.Linear(input_dim, 256)
         self.l2 = nn.Linear(256, 256)
         self.l3 = nn.Linear(256, 2 * action_dim)
 
         self.apply(weight_init)
 
     def forward(self, x, x_g, compute_pi=True, compute_log_pi=True):
+        if self.only_pos:
+            x_g = x_g[:, :2]
         x = torch.cat([x, x_g], dim=1)
         x = F.relu(self.l1(x))
         x = F.relu(self.l2(x))
@@ -75,23 +79,27 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, only_pos=False):
         super(Critic, self).__init__()
+        self.only_pos = only_pos
+        
+        input_dim = state_dim + (2 if only_pos else state_dim)
 
         # Q1 architecture
-        self.l1 = nn.Linear(2 * state_dim + action_dim, 256)
+        self.l1 = nn.Linear(input_dim + action_dim, 256)
         self.l2 = nn.Linear(256, 256)
         self.l3 = nn.Linear(256, 1)
 
         # Q2 architecture
-        self.l4 = nn.Linear(2 * state_dim + action_dim, 256)
+        self.l4 = nn.Linear(input_dim + action_dim, 256)
         self.l5 = nn.Linear(256, 256)
         self.l6 = nn.Linear(256, 1)
 
         self.apply(weight_init)
         
-
     def forward(self, x, x_g, u):
+        if self.only_pos:
+            x_g = x_g[:, :2]
         xu = torch.cat([x, x_g, u], dim=1)
 
         x1 = F.relu(self.l1(xu))
@@ -115,16 +123,17 @@ class DistSAC(object):
                  num_candidates=1,
                  log_std_min=-20,
                  log_std_max=2,
-                 use_l2=False):
+                 use_l2=False,
+                 only_pos=False):
         self.device = device
         
         self.num_candidates = num_candidates
 
-        self.actor = Actor(state_dim, action_dim, log_std_min, log_std_max).to(device)
+        self.actor = Actor(state_dim, action_dim, log_std_min, log_std_max, only_pos).to(device)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr)
 
-        self.critic = Critic(state_dim, action_dim).to(device)
-        self.critic_target = Critic(state_dim, action_dim).to(device)
+        self.critic = Critic(state_dim, action_dim, only_pos).to(device)
+        self.critic_target = Critic(state_dim, action_dim, only_pos).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
 
@@ -147,7 +156,6 @@ class DistSAC(object):
     def get_distance(self, state, repeated_ctx):
         batch_size, num_goals, state_dim = repeated_ctx.size()
         repeated_state = state.unsqueeze(1).repeat(1, num_goals, 1)
-        
         if self.use_l2:
             diff = repeated_state[:, :, :2] - repeated_ctx[:, :, :2]
             dist = diff.pow(2).sum(dim=-1).pow(0.5)
