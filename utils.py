@@ -137,20 +137,22 @@ class ContextBuffer(object):
         self.storage = []
         self.max_size = max_size
         self.state_dim = state_dim
+        self.size = 0
+        while len(self.storage) < self.max_size:
+            self.storage.append(np.zeros(state_dim))
         
     def add(self, state):
-        if len(self.storage) >= self.max_size:
+        if self.size < self.max_size:
+            self.storage[self.size] = state
+            self.size += 1
+        else:
             idx = np.random.randint(0, len(self.storage))
             self.storage[idx] = state
-        else:
-            self.storage.append(state)
         
     def __len__(self):
         return len(self.storage)
         
     def get(self):
-        if len(self.storage) == 0:
-            return np.zeros((1, self.state_dim))
         return np.array(self.storage)
 
 
@@ -194,7 +196,7 @@ class ReplayBuffer(object):
         if with_ctx:
             contexts = []
             
-        ctx_size = np.random.randint(1, self._ctxsize + 1)
+        ctx_size = self._ctxsize
         
         for traj_idx, pos_idx in idxes:
             data = self._storage[traj_idx][pos_idx]
@@ -215,7 +217,9 @@ class ReplayBuffer(object):
                 if pos_idx == 0:
                     ctxs = [np.zeros_like(obs_t) for _ in range(ctx_size)]
                 else:
+                    #import ipdb; ipdb.set_trace()
                     ctx_idxs = np.random.randint(0, pos_idx, size=(ctx_size,))
+                    #ctx_idxs = sorted(ctx_idxs)
                     ctxs = []
                     for ctx_idx in ctx_idxs:
                         ctxs.append(self._storage[traj_idx][ctx_idx][0])

@@ -32,50 +32,28 @@ def weight_init(m):
         nn.init.orthogonal_(m.weight.data)
         m.bias.data.fill_(0.0)
 
-        
-class Encoder(nn.Module):
-    def __init__(self, state_dim):
-        super().__init__()
-        
-        
-        # bz X n X 2 * state
-        self.trunk = nn.Sequential(
-            nn.Linear(2 * state_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256))
-        
-    def forward(self, x, c):
-        # x: bsz X state
-        # c: bsz X n X state
-        x = x.unsqueeze(1).expand(x.size(0), c.size(1), x.size(1))
-        xc = torch.cat([x, c], dim=2)
-        
-        h = self.trunk(xc)
-        h = h.mean(dim=1)
-        h = F.relu(h)
-        # h: bsz X 32
-        return h
-    
 
 class Actor(nn.Module):
-    def __init__(self, state_dim, action_dim, log_std_min=-20, log_std_max=2):
+    def __init__(self, state_dim, action_dim, log_std_min=-20, log_std_max=2, ctx_size=0):
         super(Actor, self).__init__()
         
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
         
-        self.encoder = Encoder(state_dim)
-        self.actor = nn.Linear(256, 2 * action_dim)
-        
+        input_dim = state_dim + 2 * ctx_size
+        self.l1 = nn.Linear(input_dim, 256)
+        self.l2 = nn.Linear(256, 256)
+        self.l3 = nn.Linear(256, 2 * action_dim)
 
         self.apply(weight_init)
 
     def forward(self, x, c, compute_pi=True, compute_log_pi=True):
-        h = self.encoder(x, c)
-        
-        mu, log_std = self.actor(h).chunk(2, dim=-1)
+        c = c[:, :, :2].contiguous()
+        c = c.view(c.size(0), -1)
+        x = torch.cat([x, c], 1)
+        x = F.relu(self.l1(x))
+        x = F.relu(self.l2(x))
+        mu, log_std = self.l3(x).chunk(2, dim=-1)
         
         log_std = torch.tanh(log_std)
         log_std = self.log_std_min + 0.5 * (self.log_std_max - self.log_std_min) * (
@@ -100,35 +78,37 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, ctx_size=0):
         super(Critic, self).__init__()
-        
-        self.encoder = Encoder(state_dim)
 
+        input_dim = state_dim + 2 * ctx_size
         # Q1 architecture
-        self.l1 = nn.Linear(256 + action_dim, 256)
-        self.l2 = nn.Linear(256, 1)
+        self.l1 = nn.Linear(input_dim + action_dim, 256)
+        self.l2 = nn.Linear(256, 256)
+        self.l3 = nn.Linear(256, 1)
 
         # Q2 architecture
-        self.l3 = nn.Linear(256 + action_dim, 256)
-        self.l4 = nn.Linear(256, 1)
+        self.l4 = nn.Linear(input_dim + action_dim, 256)
+        self.l5 = nn.Linear(256, 256)
+        self.l6 = nn.Linear(256, 1)
 
         self.apply(weight_init)
-        
 
     def forward(self, x, c, u):
-        h = self.encoder(x, c)
-        
-        hu = torch.cat([h, u], dim=1)
+        c = c[:, :, :2].contiguous()
+        c = c.view(c.size(0), -1)
+        x = torch.cat([x, c], 1)
+        xu = torch.cat([x, u], 1)
 
-        x1 = F.relu(self.l1(hu))
-        x1 = self.l2(x1)
+        x1 = F.relu(self.l1(xu))
+        x1 = F.relu(self.l2(x1))
+        x1 = self.l3(x1)
 
-        x2 = F.relu(self.l3(hu))
-        x2 = self.l4(x2)
+        x2 = F.relu(self.l4(xu))
+        x2 = F.relu(self.l5(x2))
+        x2 = self.l6(x2)
         return x1, x2
-                
-        
+
 
 class GoalSAC(object):
     def __init__(self,
@@ -139,51 +119,52 @@ class GoalSAC(object):
                  lr=1e-3,
                  log_std_min=-20,
                  log_std_max=2,
-                 ctx_size=10):
+                 ctx_size=0):
         self.device = device
 
-        self.actor = Actor(state_dim, action_dim, log_std_min, log_std_max).to(device)
+        assert ctx_size > 0
+        
+        self.actor = Actor(state_dim, action_dim, log_std_min, log_std_max, ctx_size).to(device)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr)
 
-        self.critic = Critic(state_dim, action_dim).to(device)
-        self.critic_target = Critic(state_dim, action_dim).to(device)
+        self.critic = Critic(state_dim, action_dim, ctx_size).to(device)
+        self.critic_target = Critic(state_dim, action_dim, ctx_size).to(device)
         self.critic_target.load_state_dict(self.critic.state_dict())
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=lr)
 
         self.log_alpha = torch.tensor(np.log(initial_temperature)).to(device)
         self.log_alpha.requires_grad = True
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha], lr=lr)
-        
-        self.ctx_size = ctx_size
-        
+
 
     @property
     def alpha(self):
         return self.log_alpha.exp()
 
-
     def select_action(self, state, ctx):
+        # ctx should be unused
         with torch.no_grad():
-            state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            ctx = torch.FloatTensor(ctx).unsqueeze(0).to(self.device)
+            state = torch.FloatTensor(state).to(self.device).unsqueeze(0)
+            ctx = torch.FloatTensor(ctx).to(self.device).unsqueeze(0)
             mu, _, _ = self.actor(
                 state, ctx, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten()
 
     def sample_action(self, state, ctx):
+        # ctx should be unused
         with torch.no_grad():
-            state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            ctx = torch.FloatTensor(ctx).unsqueeze(0).to(self.device)
+            state = torch.FloatTensor(state).to(self.device).unsqueeze(0)
+            ctx = torch.FloatTensor(ctx).to(self.device).unsqueeze(0)
             mu, pi, _ = self.actor(state, ctx, compute_log_pi=False)
             return pi.cpu().data.numpy().flatten()
         
     
-    def get_value(self, state, ctx, num_samples=5):
+    def get_value(self, state, num_samples=5):
         targets = []
         for _ in range(num_samples):
             with torch.no_grad():
-                _, action, _ = self.actor(state, ctx, compute_log_pi=False)
-                target_Q1, target_Q2 = self.critic(state, ctx, action)
+                _, action, _ = self.actor(state, compute_log_pi=False)
+                target_Q1, target_Q2 = self.critic(state, action)
             targets.append(torch.min(target_Q1, target_Q2))
         target = torch.cat(targets, dim=1).mean(dim=1)
         return target
@@ -192,24 +173,17 @@ class GoalSAC(object):
         # state: BxS
         # ctx: BxKxS
         # mask: Bx1
-        if ctx.size(1) >= self.ctx_size:
-            
-            mask = mask.unsqueeze(1).expand_as(ctx).contiguous()
-            mask[:, 1:, :].fill_(0)
-            state = state.unsqueeze(1).expand_as(ctx)
-
-            next_ctx = ctx * (1 - mask) + state * mask
-            
-        else:
-            next_ctx = torch.cat([ctx, state.unsqueeze(1)], dim=1)
+        new_states = mask * state + (1 - mask) * ctx[:, -1, :]
+        new_states = new_states.unsqueeze(1)
+        next_ctx = torch.cat([ctx[:, :-1, :], new_states], dim=1)
+       
         return next_ctx
-    
             
     def train(self,
               replay_buffer,
-              total_timesteps,
+              step,
               dist_policy,
-              tracker,
+              L,
               batch_size=100,
               discount=0.99,
               tau=0.005,
@@ -227,20 +201,22 @@ class GoalSAC(object):
         done = torch.FloatTensor(1 - done).to(self.device).view(-1, 1)
         ctx = torch.FloatTensor(ctx).to(self.device)
         
-        assert expl_coef > 0
-        
-        with torch.no_grad():
-            dist, _ = dist_policy.get_distance(state, ctx)
-        novel_mask = (dist > dist_threshold).float()
-        expl_bonus = novel_mask * expl_coef
-        tracker.update('expl_bonus', expl_bonus.sum().item(), expl_bonus.size(0))
-        next_ctx = self.update_context(state, ctx, novel_mask)
-
-        reward += expl_bonus.detach()
-        
+        if expl_coef > 0:
+            with torch.no_grad():
+                dist, _ = dist_policy.get_distance(state, ctx)
+            
+            novel_mask = (dist > dist_threshold).float()
+            expl_bonus = novel_mask * expl_coef
+            L.log('train/dist_ctx', dist.sum().item(), step, n=dist.size(0))
+            L.log('train/expl_bonus', expl_bonus.sum().item(), step, n=expl_bonus.size(0))
+            reward += expl_bonus.detach()
+            next_ctx = self.update_context(state, ctx, novel_mask)
+        else:
+            next_ctx = ctx
             
         
-        tracker.update('train_reward', reward.sum().item(), reward.size(0))
+        
+        L.log('train/batch_reward', reward.sum().item(), step, n=reward.size(0))
 
         def fit_critic():
             with torch.no_grad():
@@ -257,8 +233,8 @@ class GoalSAC(object):
             # Compute critic loss
             critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(
                 current_Q2, target_Q)
-            tracker.update('critic_loss', critic_loss * current_Q1.size(0),
-                           current_Q1.size(0))
+            L.log('train/critic_loss', critic_loss.item() * current_Q1.size(0),
+                           step, n=current_Q1.size(0))
             
             # Optimize the critic
             self.critic_optimizer.zero_grad()
@@ -275,8 +251,8 @@ class GoalSAC(object):
             actor_Q = torch.min(actor_Q1, actor_Q2)
 
             actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
-            tracker.update('actor_loss', actor_loss * state.size(0),
-                           state.size(0))
+            L.log('train/actor_loss', actor_loss.item() * state.size(0),
+                           step, n=state.size(0))
             
             # Optimize the actor
             self.actor_optimizer.zero_grad()
@@ -290,7 +266,7 @@ class GoalSAC(object):
                 alpha_loss.backward()
                 self.log_alpha_optimizer.step()
 
-        if total_timesteps % policy_freq == 0:
+        if step % policy_freq == 0:
             fit_actor()
             
             utils.soft_update_params(self.critic, self.critic_target, tau)

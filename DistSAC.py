@@ -180,8 +180,8 @@ class DistSAC(object):
     
     def train(self,
               replay_buffer,
-              total_timesteps,
-              tracker,
+              step,
+              L,
               batch_size=100,
               discount=0.99,
               tau=0.005,
@@ -209,7 +209,7 @@ class DistSAC(object):
         done = ((state - goals).norm(dim=-1, keepdim=True) < 1e-5).float()
         reward = -(1 - done)
         
-        tracker.update('dist_train_reward', reward.sum().item(), reward.size(0))
+        L.log('train/dist_batch_reward', reward.sum().item(), step, n=reward.size(0))
         
         def fit_critic():
             with torch.no_grad():
@@ -226,8 +226,8 @@ class DistSAC(object):
             # Compute critic loss
             critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(
                 current_Q2, target_Q)
-            tracker.update('dist_critic_loss', critic_loss * current_Q1.size(0),
-                           current_Q1.size(0))
+            L.log('train/dist_critic_loss', critic_loss.item() * current_Q1.size(0),
+                           step, n=current_Q1.size(0))
             
             # Optimize the critic
             self.critic_optimizer.zero_grad()
@@ -245,8 +245,8 @@ class DistSAC(object):
             actor_Q = torch.min(actor_Q1, actor_Q2)
 
             actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
-            tracker.update('dist_actor_loss', actor_loss * state.size(0),
-                           state.size(0))
+            L.log('train/dist_actor_loss', actor_loss.item() * state.size(0),
+                           step, n=state.size(0))
             
             # Optimize the actor
             self.actor_optimizer.zero_grad()
@@ -260,7 +260,7 @@ class DistSAC(object):
                 alpha_loss.backward()
                 self.log_alpha_optimizer.step()
 
-        if total_timesteps % policy_freq == 0:
+        if step % policy_freq == 0:
             fit_actor()
             
             utils.soft_update_params(self.critic, self.critic_target, tau)

@@ -66,7 +66,7 @@ def parse_log_files(file_name_template, key_name, value_name, num_seeds, best_k=
 
 def print_result(root, title, label=None, num_seeds=1, train=False, value_name='eval_episode_reward', max_time=None, best_k=None):
     file_name = 'train.log' if train else 'eval.log'
-    file_name_template = os.path.join(root + '_seed_%d', file_name)
+    file_name_template = os.path.join(root, 'seed_%d', file_name)
     key_name = 'total_timesteps'
     keys, means, half_stds = parse_log_files(file_name_template, key_name, value_name, num_seeds, best_k=best_k)
     label = label or root.split('/')[-1]
@@ -111,7 +111,6 @@ def plot_experiment(task, exp_query, root='runs', exp_ids=None, train=False, val
     experiments = set()
     for exp in os.listdir(root):
         if re.match(exp_query, exp):
-            exp = '_'.join(exp.split('_')[:-2])
             exp = os.path.join(root, exp)
             experiments.add(exp)
             

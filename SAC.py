@@ -111,8 +111,9 @@ class SAC(object):
                  lr=1e-3,
                  log_std_min=-20,
                  log_std_max=2,
-                 ctx_size=None):
+                 ctx_size=0):
         self.device = device
+        assert ctx_size == 0
 
         self.actor = Actor(state_dim, action_dim, log_std_min, log_std_max).to(device)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=lr)
@@ -131,7 +132,7 @@ class SAC(object):
     def alpha(self):
         return self.log_alpha.exp()
 
-    def select_action(self, state):
+    def select_action(self, state, ctx):
         # ctx should be unused
         with torch.no_grad():
             state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
@@ -139,7 +140,7 @@ class SAC(object):
                 state, compute_pi=False, compute_log_pi=False)
             return mu.cpu().data.numpy().flatten()
 
-    def sample_action(self, state):
+    def sample_action(self, state, ctx):
         # ctx should be unused
         with torch.no_grad():
             state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
@@ -159,9 +160,9 @@ class SAC(object):
             
     def train(self,
               replay_buffer,
-              total_timesteps,
+              step,
               dist_policy,
-              tracker,
+              L,
               batch_size=100,
               discount=0.99,
               tau=0.005,
@@ -184,12 +185,12 @@ class SAC(object):
             with torch.no_grad():
                 dist, _ = dist_policy.get_distance(state, ctx)
             expl_bonus = dist * expl_coef
-            tracker.update('expl_bonus', expl_bonus.sum().item(), expl_bonus.size(0))
+            L.log('train/expl_bonus', expl_bonus.sum().item(), step, n=expl_bonus.size(0))
             reward += expl_bonus.detach()
             
         
         
-        tracker.update('train_reward', reward.sum().item(), reward.size(0))
+        L.log('train/batch_reward', reward.sum().item(), reward.size(0), step)
 
         def fit_critic():
             with torch.no_grad():
@@ -206,8 +207,8 @@ class SAC(object):
             # Compute critic loss
             critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(
                 current_Q2, target_Q)
-            tracker.update('critic_loss', critic_loss * current_Q1.size(0),
-                           current_Q1.size(0))
+            L.log('train/critic_loss', critic_loss.item() * current_Q1.size(0),
+                           step, n=current_Q1.size(0))
             
             # Optimize the critic
             self.critic_optimizer.zero_grad()
@@ -224,8 +225,8 @@ class SAC(object):
             actor_Q = torch.min(actor_Q1, actor_Q2)
 
             actor_loss = (self.alpha.detach() * log_pi - actor_Q).mean()
-            tracker.update('actor_loss', actor_loss * state.size(0),
-                           state.size(0))
+            L.log('train/actor_loss', actor_loss.item() * state.size(0),
+                           step, n=state.size(0))
             
             # Optimize the actor
             self.actor_optimizer.zero_grad()
@@ -239,7 +240,7 @@ class SAC(object):
                 alpha_loss.backward()
                 self.log_alpha_optimizer.step()
 
-        if total_timesteps % policy_freq == 0:
+        if step % policy_freq == 0:
             fit_actor()
             
             utils.soft_update_params(self.critic, self.critic_target, tau)

@@ -11,11 +11,13 @@ import cv2
 
 import torch
 import torch.nn as nn
+from torch.utils.tensorboard import SummaryWriter
 
-import logger
+from logger import Logger
 import utils
 from SAC import SAC
 from DistSAC import DistSAC
+from GoalSAC import GoalSAC
 
 
 def render_env(env):
@@ -45,53 +47,52 @@ def evaluate_policy(env,
                     args,
                     policy,
                     dist_policy,
-                    tracker,
-                    total_timesteps,
-                    save_dir,
-                    num_episodes=10,
-                    render=True):
-    if render:
-        video_dir = utils.make_dir(os.path.join(save_dir, 'video'))
-    tracker.reset('eval_episode_reward')
-    tracker.reset('eval_episode_timesteps')
-    for i in range(num_episodes):
+                    L,
+                    step):
+    if not args.no_render:
+        video_dir = utils.make_dir(os.path.join(args.save_dir, 'video'))
+    for i in range(args.num_eval_episodes):
         state = reset_env(env, args, eval_mode=True)
-        if render and i == 0:
+        if not args.no_render and i == 0:
             frames = [render_env(env)]
         done = False
         sum_reward = 0
+        expl_bonus = 0
+        last_add = 0
         timesteps = 0
-        #ctx_buffer = utils.ContextBuffer(args.ctx_buffer_size, state.shape[0])
+        ctx_buffer = utils.ContextBuffer(args.ctx_size, state.shape[0])
         while not done:
-            #ctx = ctx_buffer.get()
+            ctx = ctx_buffer.get()
             with torch.no_grad():
-                action = policy.select_action(state)
-                #dist, _ = dist_policy.get_distance_numpy(state, ctx)
-
-            #if dist.sum().item() > args.dist_threshold:
-            #    ctx_buffer.add(state)
+                action = policy.select_action(state, ctx)
+                if args.expl_coef > 0:
+                    dist, _ = dist_policy.get_distance_numpy(state, ctx)
+                    if dist.sum().item() > args.dist_threshold or timesteps - last_add > args.max_gap:
+                        ctx_buffer.add(state)
+                        expl_bonus += args.expl_coef
+                        last_add = timesteps
 
             state, reward, done, _ = env.step(action)
-            if render and i == 0:
+            if not args.no_render and i == 0:
                 frames.append(render_env(env))
                 if args.env_type == 'ant':
-                    for point in []:
+                    for point in ctx_buffer.storage:
                         x, y = calc_point_xy(args.env_name, point, frames[-1].shape)
                         cv2.circle(frames[-1], (x, y), 1, (255, 255, 0), 5)
             sum_reward += reward
             timesteps += 1
 
-        if render and i == 0:
+        if not args.no_render and i == 0:
             frames = [
                 torch.tensor(frame.copy()).float() / 255 for frame in frames
             ]
-            file_name = os.path.join(video_dir, '%d.mp4' % total_timesteps)
+            file_name = os.path.join(video_dir, '%d.mp4' % step)
             utils.save_gif(file_name, frames, color_last=True)
 
         if args.env_type == 'ant':
-            tracker.update('eval_episode_success', env.get_success(reward))
-        tracker.update('eval_episode_reward', sum_reward)
-        tracker.update('eval_episode_timesteps', timesteps)
+            L.log('eval/episode_success', env.get_success(reward), step)
+        L.log('eval/episode_reward', sum_reward, step)
+        L.log('eval/episode_expl_bonus', expl_bonus, step)
 
 
 def calc_max_episode_steps(env, env_type):
@@ -148,7 +149,7 @@ def parse_args():
     parser.add_argument('--max_timesteps', default=1e6, type=int)
     parser.add_argument('--batch_size', default=512, type=int)
     parser.add_argument('--replay_buffer_size', default=1000000, type=int)
-    parser.add_argument('--ctx_buffer_size', default=20, type=int)
+    parser.add_argument('--ctx_size', default=0, type=int)
     parser.add_argument('--discount', default=0.99, type=float)
     parser.add_argument('--tau', default=0.005, type=float)
     parser.add_argument('--initial_temperature', default=0.01, type=float)
@@ -165,6 +166,8 @@ def parse_args():
     parser.add_argument('--use_l2', default=0, type=int)
     parser.add_argument('--only_pos', default=0, type=int)
     parser.add_argument('--num_candidates', default=1, type=int)
+    parser.add_argument('--max_gap', default=1000, type=int)
+    parser.add_argument('--use_tb', default=False, action='store_true')
 
     args = parser.parse_args()
     return args
@@ -180,6 +183,7 @@ def main():
     utils.make_dir(args.save_dir)
     utils.make_dir(os.path.join(args.save_dir, 'model'))
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    #sw = SummaryWriter(os.path.join(args.save_dir, 'summary'), comment='aaa')
 
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
@@ -188,7 +192,7 @@ def main():
     max_episode_steps = calc_max_episode_steps(env, args.env_type)
 
     replay_buffer = utils.ReplayBuffer(args.replay_buffer_size,
-                                       args.ctx_buffer_size)
+                                       args.ctx_size)
 
     dist_policy = DistSAC(
         device,
@@ -199,24 +203,22 @@ def main():
         args.num_candidates,
         use_l2=args.use_l2,
         only_pos=args.only_pos)
-    policy = SAC(
+    policy_model = GoalSAC if args.ctx_size > 0 else SAC
+    policy = policy_model(
         device,
         state_dim,
         action_dim,
         args.initial_temperature,
         args.lr,
-        ctx_size=args.ctx_buffer_size)
+        ctx_size=args.ctx_size)
 
-    tracker = logger.StatsTracker()
-    train_logger = logger.TrainLogger(
-        args.log_format, file_name=os.path.join(args.save_dir, 'train.log'))
-    eval_logger = logger.EvalLogger(
-        args.log_format, file_name=os.path.join(args.save_dir, 'eval.log'))
-
+    L = Logger(args.save_dir, use_tb=args.use_tb)
+   
     total_timesteps = 0
     timesteps_since_eval = 0
     episode_num = 0
     episode_reward = 0
+    episode_expl_bonus = 0
     episode_timesteps = 0
     done = True
 
@@ -225,22 +227,18 @@ def main():
         args,
         policy,
         dist_policy,
-        tracker,
-        total_timesteps,
-        args.save_dir,
-        num_episodes=args.num_eval_episodes,
-        render=not args.no_render)
-    eval_logger.dump(tracker)
+        L,
+        total_timesteps)
+    L.dump(total_timesteps)
 
     start_time = time.time()
     while total_timesteps < args.max_timesteps:
 
         if done:
             if total_timesteps != 0:
-                tracker.update('fps',
-                               episode_timesteps / (time.time() - start_time))
+                L.log('train/duration', time.time() - start_time, total_timesteps)
                 start_time = time.time()
-                train_logger.dump(tracker)
+                L.dump(total_timesteps)
 
             # Evaluate episode
             if timesteps_since_eval >= args.eval_freq:
@@ -250,44 +248,47 @@ def main():
                     args,
                     policy,
                     dist_policy,
-                    tracker,
-                    total_timesteps,
-                    args.save_dir,
-                    num_episodes=args.num_eval_episodes,
-                    render=not args.no_render)
-                eval_logger.dump(tracker)
+                    L,
+                    total_timesteps)
+                L.dump(total_timesteps)
 
                 if not args.no_eval_save:
                     policy.save(args.save_dir, total_timesteps)
                     dist_policy.save(args.save_dir, total_timesteps)
 
-            tracker.update('train_episode_reward', episode_reward)
-            tracker.update('train_episode_timesteps', episode_timesteps)
+            L.log('train/episode_reward', episode_reward, total_timesteps)
+            L.log('train/episode_expl_bonus', episode_expl_bonus, total_timesteps)
+            
             # Reset environment
             state = reset_env(env, args)
 
-            #ctx_buffer = utils.ContextBuffer(args.ctx_buffer_size, state_dim)
+            ctx_buffer = utils.ContextBuffer(args.ctx_size, state_dim)
 
             done = False
             episode_reward = 0
+            episode_expl_bonus = 0
+            last_add = total_timesteps
             episode_timesteps = 0
             episode_num += 1
 
-            tracker.update('num_episodes')
-            tracker.reset('episode_timesteps')
+            L.log('train/episode', episode_num, total_timesteps)
 
         # Select action randomly or according to policy
         if total_timesteps < args.start_timesteps:
             action = env.action_space.sample()
         else:
-            #ctx = ctx_buffer.get()
+            ctx = ctx_buffer.get()
 
             with torch.no_grad():
-                action = policy.sample_action(state)
-                #dist, _ = dist_policy.get_distance_numpy(state, ctx)
+                action = policy.sample_action(state, ctx)
+                if args.expl_coef > 0:
+                    dist, _ = dist_policy.get_distance_numpy(state, ctx)
 
-            #if dist.sum().item() > args.dist_threshold:
-            #    ctx_buffer.add(state)
+                    if dist.sum().item() > args.dist_threshold or total_timesteps - last_add > args.max_gap:
+                        ctx_buffer.add(state)
+                        episode_expl_bonus += args.expl_coef
+                        last_add = total_timesteps
+
 
         if total_timesteps >= 1e3 and args.expl_coef > 0 and args.use_l2 == 0:
             num_updates = int(1e3) if total_timesteps == 1e3 else 1
@@ -295,7 +296,7 @@ def main():
                 dist_policy.train(
                     replay_buffer,
                     total_timesteps,
-                    tracker,
+                    L,
                     args.batch_size,
                     args.discount,
                     args.tau,
@@ -309,7 +310,7 @@ def main():
                     replay_buffer,
                     total_timesteps,
                     dist_policy,
-                    tracker,
+                    L,
                     args.batch_size,
                     args.discount,
                     args.tau,
@@ -330,8 +331,6 @@ def main():
         episode_timesteps += 1
         total_timesteps += 1
         timesteps_since_eval += 1
-        tracker.update('total_timesteps')
-        tracker.update('episode_timesteps')
 
     policy.save(args.save_dir, total_timesteps)
     dist_policy.save(args.save_dir, total_timesteps)
